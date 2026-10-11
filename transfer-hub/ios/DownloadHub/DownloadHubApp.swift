@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     var body: some Scene {
         WindowGroup { PhoneWebView(model: model).preferredColorScheme(.dark).task {
             #if HUB_TESTING && targetEnvironment(simulator)
-            if UserDefaults.standard.bool(forKey: "hubSelfTest") || UserDefaults.standard.bool(forKey: "hubSelfTestOffline") { await NativeSelfTest.run(model) }
+            if UserDefaults.standard.bool(forKey: "hubSelfTest") || UserDefaults.standard.bool(forKey: "hubSelfTestOffline") { NativeSelfTest.start(model) }
             #endif
         } }
     }

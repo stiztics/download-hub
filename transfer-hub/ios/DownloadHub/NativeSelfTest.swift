@@ -7,6 +7,14 @@ import CoreVideo
 // Only the simulator test configuration can run this generated-file integration
 // suite. Device Release builds have neither this entry point nor HTTP fixtures.
 @MainActor enum NativeSelfTest {
+    private static var started = false
+    static func start(_ model: HubModel) {
+        guard !started else { return }
+        started = true
+        // A fullscreen AVKit presentation hides the SwiftUI root. Its .task
+        // is canceled on disappearance; the integration run must outlive it.
+        Task { @MainActor in await run(model) }
+    }
     static func run(_ model: HubModel) async {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let report = directory.appendingPathComponent("native-selftest.json")
