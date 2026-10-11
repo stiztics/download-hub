@@ -26,6 +26,7 @@ import CoreVideo
                 try require(snapshot.count >= 3, "Catalog did not survive process relaunch")
                 try require(snapshot.contains { ($0["series"] as? String) == "Organized on phone" }, "Organization was lost")
                 try require(DeviceLibrary.shared.state.episodes.flatMap(\.locations).filter { $0.kind == "phone" && DeviceLibrary.shared.available($0) }.count >= 3, "Saved files disappeared offline")
+                try require(DeviceLibrary.shared.state.episodes.contains { $0.file.filename == "Episode 1.mp4" && $0.position > 0 }, "Playback position did not survive relaunch")
                 checks.append("catalog, organization and files persist across offline relaunch")
             } else {
                 guard let server = UserDefaults.standard.string(forKey: "hubTestServer"), let code = UserDefaults.standard.string(forKey: "hubTestCode") else { throw HubError.message("Missing generated fixture arguments.") }
@@ -96,14 +97,15 @@ import CoreVideo
                 let indexed = DeviceLibrary.shared.state.episodes.first { $0.file.filename == "Episode 1.mp4" }!
                 media.presenter = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController
                 _ = try await media.play(indexed.id)
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                try await waitFor("actual drive playback progress") { media.playbackSeconds > 0 }
                 media.finishPlayback()
                 try await Task.sleep(nanoseconds: 500_000_000)
                 _ = try await media.importEpisode(indexed.id)
                 try require(try DeviceLibrary.shared.episode(indexed.id).locations.contains { $0.kind == "phone" }, "SSD import did not create an iPhone copy")
                 media.presenter = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController
+                try DeviceLibrary.shared.setPosition(indexed.id, seconds: 0)
                 _ = try await media.play(indexed.id)
-                try await Task.sleep(nanoseconds: 500_000_000)
+                try await waitFor("actual phone playback progress") { media.playbackSeconds > 0 }
                 media.finishPlayback()
                 checks.append("video scan, verified import, AVKit presentation and playback position")
                 model.disconnect(); ExternalDownloads.shared.disconnect()

@@ -13,6 +13,9 @@ import AVFoundation
     private var playbackID: String?
     private var timeObserver: Any?
     private var closeTimer: Timer?
+    #if HUB_TESTING && targetEnvironment(simulator)
+    var playbackSeconds: Double { playback?.currentTime().seconds ?? 0 }
+    #endif
     private func controller() throws -> UIViewController {
         guard var controller = presenter else { throw HubError.message("The screen is not ready.") }
         while let next = controller.presentedViewController { controller = next }

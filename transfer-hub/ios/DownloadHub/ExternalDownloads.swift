@@ -156,7 +156,7 @@ struct ExternalDownload: Codable, Identifiable {
 
 // Byte processing runs on the generic executor, keeping the UI responsive.
 private let externalRangeSession: URLSession = {
-    let configuration = URLSessionConfiguration.ephemeral()
+    let configuration = URLSessionConfiguration.ephemeral
     configuration.urlCache = nil
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     return URLSession(configuration: configuration)
