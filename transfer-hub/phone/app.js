@@ -12,8 +12,8 @@
   function toast(message, error = false) { $('#toast').textContent = message; $('#toast').classList.toggle('error', error); $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 6000); }
   async function action(button, task) { const pc = Boolean(button.closest('#fetcher-view')); if (pc) fetcherBusy++; button.disabled = true; if (pc) renderFetcher(); try { await task(); } catch (error) { toast(error.message, true); } finally { if (pc) fetcherBusy--; button.disabled = false; render(); } }
   function locations(file) { return file.locations || [{ kind: 'pc', label: 'On PC', available: true }]; }
-  function visibleFiles() { return state.files.filter(file => (!state.series || file.series === state.series) && (!state.season || file.season === state.season) && (state.filter === 'all' || locations(file).some(source => source.kind === state.filter)) && `${file.series} ${file.title} ${file.season} ${file.filename}`.toLowerCase().includes(state.search)); }
-  function badges(file) { return locations(file).map(source => `<span class="badge ${source.available ? '' : 'unavailable'}">${escape(source.label)}${source.available ? '' : source.kind === 'drive' ? ' · disconnected' : ' · unavailable'}</span>`).join(''); }
+  function visibleFiles() { return state.files.filter(file => (!state.series || file.series === state.series) && (!state.season || file.season === state.season) && (state.filter === 'all' || locations(file).some(source => (source.kind === state.filter || state.filter === 'pc' && source.kind === 'pending'))) && `${file.series} ${file.title} ${file.season} ${file.filename}`.toLowerCase().includes(state.search)); }
+  function badges(file) { return locations(file).map(source => `<span class="badge ${source.available ? '' : 'unavailable'}">${escape(source.label)}${source.available ? '' : source.kind === 'drive' ? ' · disconnected' : source.kind === 'pending' ? '' : ' · unavailable'}</span>`).join(''); }
   function render() {
     const paired = state.connection.paired;
     $('#connection').textContent = state.connection.demo ? 'Demo data' : state.online ? 'PC online' : paired ? 'PC unavailable' : 'Not connected';
@@ -31,7 +31,7 @@
     $('#library-offline').hidden = state.online || !state.files.some(file => locations(file).some(source => source.kind === 'pc'));
     const files = visibleFiles(), groups = [...new Set(files.map(file => file.series))].sort();
     $('#series-list').hidden = Boolean(state.series);
-    setHTML('#series-list', groups.map(series => `<button class="series" data-series="${escape(series)}" aria-label="Browse ${escape(series)}"><span class="series-icon">▦</span><span><strong>${escape(series)}</strong><small>${files.filter(file => file.series === series).length} episodes</small><span class="badges">${[...new Set(files.filter(file => file.series === series).flatMap(file => locations(file).map(source => source.kind)))].map(kind => `<span class="badge">${kind === 'phone' ? 'On iPhone' : kind === 'drive' ? 'On SSD' : 'On PC'}</span>`).join('')}</span></span></button>`).join(''));
+    setHTML('#series-list', groups.map(series => `<button class="series" data-series="${escape(series)}" aria-label="Browse ${escape(series)}"><span class="series-icon">▦</span><span><strong>${escape(series)}</strong><small>${files.filter(file => file.series === series).length} episodes</small><span class="badges">${[...new Set(files.filter(file => file.series === series).flatMap(file => locations(file).map(source => source.kind)))].map(kind => `<span class="badge">${kind === 'phone' ? 'On iPhone' : kind === 'drive' ? 'On SSD' : kind === 'pending' ? 'Downloading on PC' : 'On PC'}</span>`).join('')}</span></span></button>`).join(''));
     $('#episodes').hidden = !state.series;
     $('#series-name').textContent = state.season ? `${state.series} / ${state.season}` : state.series || '';
     $('#back').textContent = state.season ? '← All seasons' : '← All series';
@@ -45,8 +45,10 @@
     $('#selected-count').textContent = `${state.selection.size} selected`;
     $('#demo-warning').hidden = !state.connection.demo;
     $('#start').disabled = state.connection.demo || !state.queue.some(entry => !['downloaded'].includes(state.transfers.find(row => row.id === entry.id)?.status || entry.status));
-    const destination = $('#destination').value;
-    setHTML('#destination', '<option value="phone">iPhone storage</option>' + state.drives.filter(drive => drive.available).map(drive => `<option value="${escape(drive.id)}">SSD · ${escape(drive.name)}</option>`).join(''));
+    const destination = $('#destination').value, fetchDestination = $('#fetcher-destination').value;
+    setHTML('#destination', '<option value="phone">iPhone storage</option>' + state.drives.map(drive => `<option value="${escape(drive.id)}">SSD · ${escape(drive.name)}${drive.available ? '' : ' · disconnected'}</option>`).join(''));
+    setHTML('#fetcher-destination', $('#destination').innerHTML);
+    if ([...$('#fetcher-destination').options].some(option => option.value === fetchDestination)) $('#fetcher-destination').value = fetchDestination;
     if ([...$('#destination').options].some(option => option.value === destination)) $('#destination').value = destination;
     $('#destination-note').textContent = $('#destination').value === 'phone' ? 'iPhone downloads support background transfers.' : 'Direct SSD transfers · keep this app open and the drive connected. Partial files stay on the drive.';
     setHTML('#drive-list', state.drives.map(drive => `<div class="drive"><strong>${escape(drive.name)}</strong><span class="badge">${drive.available ? 'Connected' : 'Disconnected'}</span><button data-scan="${escape(drive.id)}" ${drive.available ? '' : 'disabled'}>Rescan</button></div>`).join('') || '<p class="muted small">Add a folder from a connected SSD or USB drive in Library.</p>');
@@ -67,6 +69,7 @@
     renderFetcher();
   }
   function renderFetcher() {
+    setHTML('#pc-summary-jobs', (fetcher.status?.jobs || []).map(job => `<div class="card"><strong>${escape(job.title)} · Episode ${escape(job.episode)}</strong><p class="muted small">${escape(job.phase || job.status)}</p></div>`).join('') || '<p class="muted small">No PC downloads to show. Manage requests in Discover.</p>');
     const disabled = !state.connection.paired || state.connection.demo || !fetcher.status || Boolean(fetcher.error) || fetcherBusy > 0;
     $('#fetcher-refresh').disabled = fetcherBusy > 0;
     $('#fetcher-status').textContent = state.connection.demo ? 'Demo — PC runner controls unavailable' : fetcher.error || (fetcher.status?.blocked ? `Stopped: ${fetcher.status.blocked.message}` : fetcher.status?.paused ? 'PC downloads paused' : fetcher.status ? `Runner online · ${fetcher.status.active} active · ${fetcher.status.jobs.filter(job => job.status === 'queued').length} queued` : 'Checking the PC runner…');
@@ -99,7 +102,7 @@
     if (epoch !== connectionEpoch) return;
     fetcher.results = results; fetcher.page = page; fetcher.title = null; fetcher.selection.clear(); fetcher.notice = ''; renderFetcher();
   }
-  function switchTab(tab) { state.tab = tab; render(); window.scrollTo(0, 0); if (tab === 'fetcher') void refreshFetcher(); }
+  function switchTab(tab) { state.tab = tab; render(); window.scrollTo(0, 0); if (['fetcher', 'queue'].includes(tab)) void refreshFetcher(); }
   let savedRevision = '';
   async function refreshTransfers() { state.transfers = await Hub.call('transfers'); state.queue = await Hub.call('queue'); const revision = state.transfers.filter(row => row.status === 'downloaded').map(row => row.id).join('|'); if (revision !== savedRevision) { savedRevision = revision; state.files = await Hub.call('library'); } render(); }
   async function refresh() {
@@ -162,9 +165,9 @@
   $('#fetcher-add').addEventListener('click', event => action(event.currentTarget, async () => {
     if (!fetcher.title || !fetcher.selection.size) throw new Error('Select episodes first.');
     const epoch = connectionEpoch;
-    const result = await Hub.call('fetcherAdd', { titleId: fetcher.title.id, episodeIds: [...fetcher.selection], series: $('#fetcher-series').value.trim() });
+    const result = await Hub.call('fetcherAdd', { titleId: fetcher.title.id, episodeIds: [...fetcher.selection], series: $('#fetcher-series').value.trim(), destination: $('#fetcher-destination').value, copyWhenReady: $('#fetcher-copy').checked });
     if (epoch !== connectionEpoch) return;
-    fetcher.notice = `${result.added} episodes queued on PC · ${result.skipped} already queued or saved`; fetcher.selection.clear(); await refreshFetcher();
+    fetcher.notice = `${result.added} episodes queued on PC · ${result.skipped} already queued or saved`; fetcher.selection.clear(); await refreshFetcher(); await refresh();
   }));
   $('#confirm-cancel').addEventListener('click', () => { pendingConfirmation = null; $('#confirm-dialog').close(); });
   $('#confirm-yes').addEventListener('click', event => action(event.currentTarget, async () => { const task = pendingConfirmation; pendingConfirmation = null; $('#confirm-dialog').close(); await task?.(); }));
@@ -196,5 +199,6 @@
   boot();
   setInterval(() => { if (!document.hidden) refreshTransfers().catch(() => {}); }, 1000);
   setInterval(() => { if (!document.hidden && state.connection.paired) void syncPC(); }, 30000);
-  setInterval(() => { if (!document.hidden && state.tab === 'fetcher') void refreshFetcher(); }, 4000);
+  setInterval(() => { if (!document.hidden && ['fetcher', 'queue'].includes(state.tab)) void refreshFetcher(); }, 4000);
+  setInterval(() => { if (!document.hidden) refresh().catch(() => {}); }, 5000);
 })();

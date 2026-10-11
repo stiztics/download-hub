@@ -73,12 +73,12 @@ export async function createHub(options = {}) {
         if (seen.has(physical)) continue;
         seen.add(physical);
         const season = item.folder.split(/[\\/]/).some(part => part.toLowerCase() === 'movies') ? 'Movie' : item.code || 'Season';
-        files.push({ id: sha(String(item.id) + '\0' + path.relative(libraryRoot, resolved)), series: item.series || 'Other', title: item.title || item.series || 'Untitled', season, episode: item.episode, filename: item.file, bytes: info.size, quality: item.quality || null, completedAt: item.completedAt || null, physical, mtime: info.mtimeMs });
+        files.push({ id: sha(String(item.id) + '\0' + path.relative(libraryRoot, resolved)), series: item.series || 'Other', title: item.title || item.series || 'Untitled', season, episode: item.episode, filename: item.file, bytes: info.size, quality: item.quality || null, completedAt: item.completedAt || null, sourceId: item.sourceId || (String(item.id).includes('/') ? String(item.id) : null), physical, mtime: info.mtimeMs });
       } catch (error) { if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error; unavailable++; }
     }
     return { files, unavailable, sourceStatus: manifest.status ?? 'unknown' };
   }
-  const publicFile = ({ physical, mtime, ...file }) => file;
+  const publicFile = ({ physical, mtime, ...file }) => ({ ...file, fingerprint: sha(`${file.id}:${file.bytes}:${mtime}`) });
   function json(res, status, value, extra = {}) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra }); res.end(JSON.stringify(value)); }
   async function body(req) {
     if (!req.headers['content-type']?.startsWith('application/json')) throw Object.assign(new Error('JSON body required.'), { status: 415 });

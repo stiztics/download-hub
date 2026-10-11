@@ -21,7 +21,8 @@
       if (!native) return window.WindowsHubHost.call(method, params);
       return new Promise((resolve, reject) => {
         const id = String(++counter);
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error('The request timed out. Check PC downloads before retrying.')); }, method.startsWith('fetcher') ? 250000 : 35000);
+        const fileOperation = ['addFolder', 'scanDrive', 'importFiles', 'importEpisode', 'exportEpisode'].includes(method);
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('The request timed out. Check the PC or connected drive before retrying.')); }, fileOperation ? 1800000 : method.startsWith('fetcher') ? 250000 : 35000);
         pending.set(id, { resolve, reject, timer });
         try { native.postMessage({ id, method, params }); }
         catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }

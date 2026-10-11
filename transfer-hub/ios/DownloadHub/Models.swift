@@ -11,6 +11,8 @@ struct LibraryFile: Codable, Identifiable {
     let bytes: Int64
     let quality: Int?
     let completedAt: String?
+    var sourceId: String? = nil
+    var fingerprint: String? = nil
     var episodeLabel: String { season == "Movie" ? "Movie" : "Episode \(episode.map { $0.formatted(.number.precision(.fractionLength(0...2))) } ?? "—")" }
 }
 struct LibraryResponse: Codable { let files: [LibraryFile]; let unavailable: Int; let sourceStatus: String }
@@ -27,6 +29,7 @@ struct QueueEntry: Codable, Identifiable {
     let queuedAt: String
     let updatedAt: String
     var clientOwned: Bool? = nil
+    var fingerprint: String? = nil
 }
 struct PairResponse: Decodable { let token: String }
 struct ChecksumResponse: Decodable { let sha256: String; let bytes: Int64 }
@@ -78,7 +81,7 @@ enum Keychain {
         if update == errSecItemNotFound {
             var item = query; attributes.forEach { item[$0.key] = $0.value }
             guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw HubError.message("Could not store the connection securely.") }
-        } else if update != errSecSuccess { throw HubError.message("Could not update the connection securely.") }
+        } else if update != errSecSuccess { throw HubError.message("Could not update the connection securely (\(update)).") }
     }
     static func remove() { SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "connection"] as CFDictionary) }
 }

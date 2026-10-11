@@ -50,7 +50,7 @@ import AVFoundation
         defer { root.stopAccessingSecurityScopedResource() }
         let name = DeviceLibrary.shared.state.drives.first(where: { $0.id == driveID })!.name
         let files = try await Task.detached(priority: .utility) { () throws -> [(String, LibraryFile)] in
-            let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey]
+            let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey, .contentModificationDateKey]
             guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { throw HubError.message("The folder could not be read.") }
             var items: [(String, LibraryFile)] = []
             for case let file as URL in enumerator {
@@ -60,13 +60,15 @@ import AVFoundation
                 guard values.isRegularFile == true, values.isSymbolicLink != true, let bytes = values.fileSize, bytes > 0,
                       file.path.hasPrefix(root.path + "/") else { continue }
                 let relative = String(file.path.dropFirst(root.path.count + 1))
-                items.append((relative, inferredEpisode(file, relative: relative, folderName: name, bytes: Int64(bytes))))
+                var metadata = inferredEpisode(file, relative: relative, folderName: name, bytes: Int64(bytes))
+                metadata.fingerprint = "\(bytes):\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+                items.append((relative, metadata))
                 if items.count > 20_000 { throw HubError.message("Choose a smaller folder (up to 20,000 videos).") }
             }
             return items
         }.value
         for (relative, file) in files {
-            try DeviceLibrary.shared.upsert(file, location: EpisodeLocation(id: "drive:\(driveID):\(relative)", kind: "drive", label: "On SSD · \(name)", driveID: driveID, relativePath: relative), persist: false)
+            try DeviceLibrary.shared.upsert(file, location: EpisodeLocation(id: "drive:\(driveID):\(relative)", kind: "drive", label: "On SSD · \(name)", driveID: driveID, relativePath: relative, fingerprint: file.fingerprint), persist: false)
         }
         try DeviceLibrary.shared.save()
         return files.count
@@ -101,7 +103,7 @@ import AVFoundation
                 }
             }
             return ["playing": true]
-        } catch { root?.stopAccessingSecurityScopedResource(); stopPlayback(); throw error }
+        } catch { if playbackRoot == nil { root?.stopAccessingSecurityScopedResource() }; stopPlayback(); throw error }
     }
     @objc private func closePlayback() { playerController?.dismiss(animated: true); stopPlayback() }
     func finishPlayback() { closePlayback() }
@@ -115,9 +117,10 @@ import AVFoundation
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
     func importFiles() async throws -> [String: Any] {
-        let urls = try await pick(types: [.movie, .video], multiple: true)
+        let urls = try await pick(types: [.item], multiple: true)
         var count = 0
         for url in urls {
+            guard ["mp4", "m4v", "mov", "mkv", "avi", "webm", "ts"].contains(url.pathExtension.lowercased()) else { throw HubError.message("Choose video files to import.") }
             let allowed = url.startAccessingSecurityScopedResource()
             defer { if allowed { url.stopAccessingSecurityScopedResource() } }
             let name = UUID().uuidString + "_" + url.lastPathComponent
@@ -142,7 +145,7 @@ import AVFoundation
         let name = UUID().uuidString + "_" + item.file.filename
         let target = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
         let digest = try await Task.detached(priority: .utility) { () throws -> String in
-            try coordinatedCopy(from: url, to: target)
+            try coordinatedCopy(from: url, to: target, expectedBytes: item.file.bytes, expectedChecksum: source.checksum)
             do { return try fileDigest(target) } catch { try? FileManager.default.removeItem(at: target); throw error }
         }.value
         try DeviceLibrary.shared.setChecksum(locationID: source.id, checksum: digest)
@@ -160,7 +163,7 @@ import AVFoundation
         let (url, root) = try DeviceLibrary.shared.localURL(source); defer { root?.stopAccessingSecurityScopedResource() }
         if url.standardizedFileURL == target.standardizedFileURL { throw HubError.message("This file is already at that destination.") }
         let digest = try await Task.detached(priority: .utility) { () throws -> String in
-            try coordinatedCopy(from: url, to: target)
+            try coordinatedCopy(from: url, to: target, expectedBytes: item.file.bytes, expectedChecksum: source.checksum)
             return try fileDigest(target)
         }.value
         try DeviceLibrary.shared.setChecksum(locationID: source.id, checksum: digest)
@@ -183,7 +186,7 @@ func inferredEpisode(_ url: URL, relative: String, folderName: String, bytes: In
     let episode = match.flatMap { Range($0.range(at: 1), in: filename) }.flatMap { Double(filename[$0]) }
     return LibraryFile(id: UUID().uuidString, series: series, title: series, season: season, episode: episode, filename: filename, bytes: bytes, quality: nil, completedAt: nil)
 }
-func coordinatedCopy(from source: URL, to target: URL) throws {
+func coordinatedCopy(from source: URL, to target: URL, expectedBytes: Int64? = nil, expectedChecksum: String? = nil) throws {
     try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
     var coordinationError: NSError?, operationError: Error?
     NSFileCoordinator().coordinate(readingItemAt: source, options: [], writingItemAt: target, options: .forReplacing, error: &coordinationError) { source, target in
@@ -193,6 +196,12 @@ func coordinatedCopy(from source: URL, to target: URL) throws {
             let temporary = target.deletingLastPathComponent().appendingPathComponent("." + UUID().uuidString + ".copying")
             defer { try? FileManager.default.removeItem(at: temporary) }
             try FileManager.default.copyItem(at: source, to: temporary)
+            let sourceDigest = try fileDigest(source), targetDigest = try fileDigest(temporary)
+            guard sourceDigest == targetDigest, expectedChecksum == nil || sourceDigest == expectedChecksum else { throw HubError.message("Copy verification failed. The source may have changed.") }
+            if let expectedBytes {
+                let bytes = (try temporary.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
+                guard Int64(bytes) == expectedBytes else { throw HubError.message("The source size changed. Rescan the folder before copying.") }
+            }
             try FileManager.default.moveItem(at: temporary, to: target)
         } catch { operationError = error }
     }

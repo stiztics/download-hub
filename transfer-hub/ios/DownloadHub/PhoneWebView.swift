@@ -36,6 +36,7 @@ import UIKit
     weak var webView: WKWebView?
     var subscription: AnyCancellable?
     private let media = LibraryMedia()
+    private var titles: [String: FetcherTitleResponse] = [:]
     private var root: URL? { Bundle.main.resourceURL?.appendingPathComponent("phone", isDirectory: true) }
     init(model: HubModel) {
         self.model = model
@@ -112,6 +113,15 @@ import UIKit
             do {
                 let library: LibraryResponse = try await api().send("library")
                 try DeviceLibrary.shared.synchronize(library.files, server: credentials.server)
+                try await DeviceLibrary.shared.reconcileTransfers(library.files, credentials: credentials)
+                for (request, episode, source) in DeviceLibrary.shared.readyRequests(library.files, server: credentials.server) {
+                    if request.copyWhenReady { try stage(episode, source: source, destination: request.destination) }
+                    try DeviceLibrary.shared.finishRequest(request.id)
+                    if request.copyWhenReady {
+                        TransferManager.shared.startWaiting()
+                        try ExternalDownloads.shared.start()
+                    }
+                }
                 // Existing desktop pickup requests remain supported, but the app
                 // creates its own transfer requests without a server queue round trip.
                 let pickup: [QueueEntry] = try await api().send("queue")
@@ -146,10 +156,8 @@ import UIKit
             for id in ids {
                 let episode = try DeviceLibrary.shared.episode(id)
                 guard let source = episode.locations.first(where: { $0.kind == "pc" && $0.server == credentials.server }), let fileID = source.fileID else { throw HubError.message("This episode has no copy on the connected PC.") }
-                if destination != "phone" { try ExternalDownloads.shared.stage(episode, source: source, driveID: destination); continue }
-                if episode.locations.contains(where: { $0.kind == "phone" && DeviceLibrary.shared.available($0) }) { continue }
-                let entry = QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: fileID, filename: episode.file.filename, series: episode.file.series, title: episode.file.title, bytes: episode.file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true)
-                TransferManager.shared.stage([entry])
+                _ = fileID
+                try stage(episode, source: source, destination: destination)
             }
             return transfers() + ExternalDownloads.shared.snapshot()
         case "transfers": return transfers() + ExternalDownloads.shared.snapshot()
@@ -163,10 +171,14 @@ import UIKit
         case "fetcherTitle":
             guard let id = params["id"] as? String, id.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else { throw HubError.message("Invalid title.") }
             let response: FetcherTitleResponse = try await api().send("fetcher/titles/" + id, timeout: 240)
+            titles[id] = response
             return try json(response)
         case "fetcherAdd":
             guard let titleId = params["titleId"] as? String, titleId.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil, let episodeIds = params["episodeIds"] as? [String], !episodeIds.isEmpty, episodeIds.count <= 2000, episodeIds.allSatisfy({ $0.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil }), let series = params["series"] as? String, !series.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, series.count <= 150 else { throw HubError.message("Select episodes and enter a collection folder name.") }
             let response: FetcherAddResponse = try await api().send("download-jobs", method: "POST", body: JSONSerialization.data(withJSONObject: ["titleId": titleId, "episodeIds": episodeIds, "series": series]), timeout: 240)
+            if let title = titles[titleId], let credentials = model.credentials {
+                try DeviceLibrary.shared.requestPC(title: title, episodeIDs: episodeIds, series: series, server: credentials.server, destination: params["destination"] as? String ?? "phone", copyWhenReady: params["copyWhenReady"] as? Bool ?? true)
+            }
             return try json(response)
         case "fetcherControl":
             guard let action = params["action"] as? String, ["pause", "resume", "cancel", "retry", "prioritize"].contains(action) else { throw HubError.message("Invalid PC queue action.") }
@@ -215,5 +227,12 @@ import UIKit
             #endif
         default: throw HubError.message("Unsupported app command.")
         }
+    }
+    private func stage(_ episode: DeviceEpisode, source: EpisodeLocation, destination: String) throws {
+        guard let fileID = source.fileID else { throw HubError.message("PC file is unavailable.") }
+        if destination != "phone" { try ExternalDownloads.shared.stage(episode, source: source, driveID: destination); return }
+        if episode.locations.contains(where: { $0.kind == "phone" && DeviceLibrary.shared.available($0) }) { return }
+        let entry = QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: fileID, filename: episode.file.filename, series: episode.file.series, title: episode.file.title, bytes: episode.file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true, fingerprint: episode.file.fingerprint)
+        TransferManager.shared.stage([entry])
     }
 }

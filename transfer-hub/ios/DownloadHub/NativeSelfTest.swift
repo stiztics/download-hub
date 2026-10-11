@@ -26,7 +26,7 @@ import CoreVideo
                 let response: LibraryResponse = try await HubAPI(credentials: credentials).send("library")
                 try require(response.files.count == 2, "Fixture should contain two files")
                 try DeviceLibrary.shared.synchronize(response.files, server: credentials.server)
-                let entries = response.files.map { file in QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: file.id, filename: file.filename, series: file.series, title: file.title, bytes: file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true) }
+                let entries = response.files.map { file in QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: file.id, filename: file.filename, series: file.series, title: file.title, bytes: file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true, fingerprint: file.fingerprint) }
                 TransferManager.shared.stage(entries); TransferManager.shared.startWaiting()
                 try await waitFor("native iPhone transfers") { TransferManager.shared.transfers.filter { $0.status == "downloaded" }.count == 2 }
                 _ = try DeviceLibrary.shared.snapshot()
@@ -49,13 +49,20 @@ import CoreVideo
                 let source = first.locations.first { $0.kind == "pc" }!
                 try ExternalDownloads.shared.stage(try DeviceLibrary.shared.episode(first.id), source: source, driveID: drive.id)
                 try ExternalDownloads.shared.start()
+                try await waitFor("first external chunk") { ExternalDownloads.shared.jobs.first?.received ?? 0 >= 1_048_576 }
+                let directID = ExternalDownloads.shared.jobs[0].id
+                try require(ExternalDownloads.shared.jobs[0].status == "downloading", "External transfer finished before pause coverage")
+                ExternalDownloads.shared.pause(directID)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                try require(ExternalDownloads.shared.jobs[0].status == "paused", "External pause was not preserved")
+                try ExternalDownloads.shared.resume(directID)
                 try await waitFor("native direct folder transfer") { ExternalDownloads.shared.jobs.first?.status == "downloaded" }
                 let external = try DeviceLibrary.shared.episode(first.id).locations.first { $0.kind == "drive" }!
                 let (externalURL, scope) = try DeviceLibrary.shared.localURL(external)
                 defer { scope?.stopAccessingSecurityScopedResource() }
                 try require(try fileDigest(externalURL) == external.checksum, "External bytes are wrong")
                 try require(DeviceLibrary.shared.state.episodes.count == 2, "Verified SSD copy was not deduplicated")
-                checks.append("direct bounded range writes and verified PC/phone/drive deduplication")
+                checks.append("direct bounded range writes, partial pause/resume and verified PC/phone/drive deduplication")
                 let copy = root.appendingPathComponent("Exported/Season 3/" + first.file.filename)
                 try coordinatedCopy(from: externalURL, to: copy)
                 do { try coordinatedCopy(from: externalURL, to: copy); throw HubError.message("Existing export was overwritten") }
@@ -71,6 +78,11 @@ import CoreVideo
                 let count = try await media.scan(drive.id)
                 try require(count == 1, "External video folder was not indexed")
                 let indexed = DeviceLibrary.shared.state.episodes.first { $0.file.filename == "Episode 1.mp4" }!
+                media.presenter = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController
+                _ = try await media.play(indexed.id)
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                media.finishPlayback()
+                try await Task.sleep(nanoseconds: 500_000_000)
                 _ = try await media.importEpisode(indexed.id)
                 try require(try DeviceLibrary.shared.episode(indexed.id).locations.contains { $0.kind == "phone" }, "SSD import did not create an iPhone copy")
                 media.presenter = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController

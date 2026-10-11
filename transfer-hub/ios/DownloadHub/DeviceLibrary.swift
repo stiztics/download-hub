@@ -12,6 +12,7 @@ struct EpisodeLocation: Codable, Identifiable {
     var fileID: String?
     var checksum: String?
     var present: Bool = true
+    var fingerprint: String? = nil
 }
 struct DeviceEpisode: Codable, Identifiable {
     var id: String
@@ -29,6 +30,14 @@ struct DeviceLibraryState: Codable {
     var version = 1
     var episodes: [DeviceEpisode] = []
     var drives: [LibraryDrive] = []
+    var requests: [PendingPCRequest]? = nil
+}
+struct PendingPCRequest: Codable, Identifiable {
+    var id: String
+    var sourceID: String
+    var server: URL
+    var destination: String
+    var copyWhenReady: Bool
 }
 
 // The catalog belongs to the phone. Paths and bookmarks never cross the bridge.
@@ -58,6 +67,11 @@ struct DeviceLibraryState: Codable {
         return item
     }
     func upsert(_ file: LibraryFile, location: EpisodeLocation, persist: Bool = true) throws {
+        if let index = state.episodes.firstIndex(where: { $0.locations.contains { $0.id == location.id } }), state.episodes[index].locations.count > 1,
+           let old = state.episodes[index].locations.first(where: { $0.id == location.id }),
+           (state.episodes[index].file.bytes != file.bytes || (old.fingerprint != nil && location.fingerprint != nil && old.fingerprint != location.fingerprint)) {
+            state.episodes[index].locations.removeAll { $0.id == location.id }
+        }
         if let index = state.episodes.firstIndex(where: { $0.locations.contains(where: { $0.id == location.id }) }) {
             let slot = state.episodes[index].locations.firstIndex(where: { $0.id == location.id })!
             state.episodes[index].locations[slot] = location
@@ -74,6 +88,7 @@ struct DeviceLibraryState: Codable {
             let matching = state.episodes.filter { $0.file.bytes == file.bytes && $0.locations.contains { $0.checksum == checksum } }
             if let first = matching.first, matching.count > 1, let index = state.episodes.firstIndex(where: { $0.id == first.id }) {
                 for item in matching.dropFirst() {
+                    if item.organized == true && state.episodes[index].organized != true { state.episodes[index].file = item.file; state.episodes[index].organized = true }
                     for source in item.locations where !state.episodes[index].locations.contains(where: { $0.id == source.id }) { state.episodes[index].locations.append(source) }
                     state.episodes[index].position = max(state.episodes[index].position, item.position)
                 }
@@ -90,7 +105,13 @@ struct DeviceLibraryState: Codable {
             }
         }
         for file in files {
-            try upsert(file, location: EpisodeLocation(id: "pc:\(server.absoluteString):\(file.id)", kind: "pc", label: "On PC", server: server, fileID: file.id), persist: false)
+            if let source = file.sourceId, let index = state.episodes.firstIndex(where: { $0.locations.contains { $0.kind == "pending" && $0.server == server && $0.fileID == source } }) {
+                state.episodes[index].locations.removeAll { $0.kind == "pending" }
+                if state.episodes[index].organized != true { state.episodes[index].file = file }
+                state.episodes[index].locations.append(EpisodeLocation(id: "pc:\(server.absoluteString):\(file.id)", kind: "pc", label: "On PC", server: server, fileID: file.id, fingerprint: file.fingerprint))
+            } else {
+                try upsert(file, location: EpisodeLocation(id: "pc:\(server.absoluteString):\(file.id)", kind: "pc", label: "On PC", server: server, fileID: file.id, fingerprint: file.fingerprint), persist: false)
+            }
         }
         try save()
     }
@@ -101,13 +122,28 @@ struct DeviceLibraryState: Codable {
             let sourceID = "pc:\(row.server.absoluteString):\(row.entry.fileId)"
             let known = state.episodes.first(where: { $0.locations.contains { $0.id == sourceID } })?.file
             let file = known ?? LibraryFile(id: row.entry.fileId, series: row.entry.series, title: row.entry.title, season: "Unsorted", episode: nil, filename: row.entry.filename, bytes: row.entry.bytes, quality: nil, completedAt: nil)
-            if let digest = row.verifiedSHA256 { try setChecksum(locationID: sourceID, checksum: digest) }
+            if let digest = row.verifiedSHA256 { try setChecksum(locationID: sourceID, checksum: digest, fingerprint: row.entry.fingerprint) }
             try upsert(file, location: EpisodeLocation(id: "phone:\(name)", kind: "phone", label: "On iPhone", localName: name, checksum: row.verifiedSHA256))
         }
     }
-    func setChecksum(locationID: String, checksum: String) throws {
+    func reconcileTransfers(_ files: [LibraryFile], credentials: Credentials) async throws {
+        for row in TransferManager.shared.transfers where row.status == "downloaded" && row.server == credentials.server {
+            guard let name = row.localName, let digest = row.verifiedSHA256, TransferManager.shared.fileURL(row) != nil,
+                  let file = files.first(where: { $0.id == row.entry.fileId }), file.bytes == row.entry.bytes else { continue }
+            let sourceID = "pc:\(credentials.server.absoluteString):\(file.id)"
+            if state.episodes.contains(where: { $0.locations.contains { $0.id == sourceID } && $0.locations.contains { $0.localName == name } }) { continue }
+            // Older transfers have no file version. Compare actual remote content
+            // before attaching them to today's PC entry.
+            if row.entry.fingerprint != file.fingerprint || row.entry.fingerprint == nil {
+                guard let result: ChecksumResponse = try? await HubAPI(credentials: credentials).send("files/\(file.id)/checksum"), result.sha256 == digest else { continue }
+            }
+            try setChecksum(locationID: sourceID, checksum: digest, fingerprint: file.fingerprint)
+            try upsert(file, location: EpisodeLocation(id: "phone:\(name)", kind: "phone", label: "On iPhone", localName: name, checksum: digest))
+        }
+    }
+    func setChecksum(locationID: String, checksum: String, fingerprint: String? = nil) throws {
         for index in state.episodes.indices {
-            if let slot = state.episodes[index].locations.firstIndex(where: { $0.id == locationID }) { state.episodes[index].locations[slot].checksum = checksum }
+            if let slot = state.episodes[index].locations.firstIndex(where: { $0.id == locationID }), state.episodes[index].locations[slot].kind != "pc" || (fingerprint != nil && fingerprint == state.episodes[index].locations[slot].fingerprint) { state.episodes[index].locations[slot].checksum = checksum }
         }
         try save()
     }
@@ -121,9 +157,33 @@ struct DeviceLibraryState: Codable {
               episode == nil || (episode!.isFinite && episode! >= 0),
               let index = state.episodes.firstIndex(where: { $0.id == id }) else { throw HubError.message("Enter a series, season, and valid episode number.") }
         let file = state.episodes[index].file
-        state.episodes[index].file = LibraryFile(id: file.id, series: series, title: series, season: season, episode: episode, filename: file.filename, bytes: file.bytes, quality: file.quality, completedAt: file.completedAt)
+        state.episodes[index].file = LibraryFile(id: file.id, series: series, title: series, season: season, episode: episode, filename: file.filename, bytes: file.bytes, quality: file.quality, completedAt: file.completedAt, sourceId: file.sourceId, fingerprint: file.fingerprint)
         state.episodes[index].organized = true; try save()
     }
+    func requestPC(title: FetcherTitleResponse, episodeIDs: [String], series: String, server: URL, destination: String, copyWhenReady: Bool) throws {
+        if state.requests == nil { state.requests = [] }
+        for episode in title.episodes where episodeIDs.contains(episode.id) {
+            let sourceID = title.id + "/" + episode.id
+            if state.requests!.contains(where: { $0.sourceID == sourceID && $0.server == server && $0.destination == destination }) { continue }
+            let number: Double?
+            switch episode.number { case .number(let value): number = value; case .text(let value): number = Double(value) }
+            let file = LibraryFile(id: "pending:" + sourceID, series: series, title: title.title, season: "Pending downloads", episode: number, filename: "Episode \(number?.description ?? episode.id)", bytes: 0, quality: nil, completedAt: nil, sourceId: sourceID)
+            state.requests!.append(PendingPCRequest(id: UUID().uuidString, sourceID: sourceID, server: server, destination: destination, copyWhenReady: copyWhenReady))
+            if !state.episodes.contains(where: { $0.file.sourceId == sourceID && $0.locations.contains { $0.server == server } }) {
+                try upsert(file, location: EpisodeLocation(id: "pending:\(server.absoluteString):\(sourceID)", kind: "pending", label: "Downloading on PC", server: server, fileID: sourceID, present: false), persist: false)
+            }
+        }
+        try save()
+    }
+    func readyRequests(_ files: [LibraryFile], server: URL) -> [(PendingPCRequest, DeviceEpisode, EpisodeLocation)] {
+        (state.requests ?? []).filter { $0.server == server }.compactMap { request in
+            guard let file = files.first(where: { $0.sourceId == request.sourceID }),
+                  let episode = state.episodes.first(where: { $0.locations.contains { $0.kind == "pc" && $0.server == server && $0.fileID == file.id } }),
+                  let source = episode.locations.first(where: { $0.kind == "pc" && $0.server == server && $0.fileID == file.id }) else { return nil }
+            return (request, episode, source)
+        }
+    }
+    func finishRequest(_ id: String) throws { state.requests?.removeAll { $0.id == id }; try save() }
     func addDrive(_ url: URL) throws -> LibraryDrive {
         let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
         if let existing = state.drives.first(where: { (try? resolveDrive($0.id).standardizedFileURL) == url.standardizedFileURL }) { return existing }

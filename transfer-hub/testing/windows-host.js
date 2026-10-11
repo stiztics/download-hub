@@ -5,6 +5,9 @@
   let credentials = JSON.parse(sessionStorage.getItem('hub-test-connection') || 'null');
   let demo = false, demoQueue = [];
   let catalog = JSON.parse(localStorage.getItem('hub-test-catalog') || '[]');
+  const titles = new Map();
+  let requests = JSON.parse(localStorage.getItem('hub-test-requests') || '[]');
+  const rememberRequests = () => localStorage.setItem('hub-test-requests', JSON.stringify(requests));
   const driveState = JSON.parse(localStorage.getItem('hub-test-drives') || '[]');
   const rememberCatalog = () => localStorage.setItem('hub-test-catalog', JSON.stringify(catalog));
   function snapshot() {
@@ -149,12 +152,21 @@
             const files = (await (await api('library')).json()).files;
             for (const entry of catalog) for (const source of entry.locations) if (source.kind === 'pc') source.available = files.some(file => file.id === entry.id);
             for (const file of files) {
-              const previous = catalog.find(entry => entry.id === file.id);
+              const pending = catalog.find(entry => entry.sourceId === file.sourceId && file.sourceId && entry.locations.some(source => source.kind === 'pending'));
+              if (pending) { pending.id = file.id; pending.locations = []; }
+              const previous = pending || catalog.find(entry => entry.id === file.id);
               const source = { id: 'pc:' + file.id, kind: 'pc', label: 'On PC', available: true };
               if (previous) { if (!previous.organized) Object.assign(previous, file); previous.locations = [...previous.locations.filter(location => location.kind !== 'pc'), source]; }
               else catalog.push({ ...file, locations: [source] });
             }
-            rememberCatalog(); return { online: true };
+            rememberCatalog();
+            for (const request of [...requests]) {
+              const file = files.find(file => file.sourceId === request.sourceId);
+              if (!file) continue;
+              if (request.copyWhenReady) { await this.call('addQueue', { fileIds: [file.id], destination: request.destination }); for (const row of rows.values()) if (row.status === 'waiting') { row.status = 'queued'; await save(row); } pump(); }
+              requests = requests.filter(item => item !== request); rememberRequests();
+            }
+            return { online: true };
           } catch (error) { return { online: false, error: error.message }; }
         }
         case 'drives': return structuredClone(driveState);
@@ -207,8 +219,17 @@
           if (demo) throw new Error('Demo — PC runner controls unavailable');
           if (method === 'fetcherStatus') return (await api('download-jobs')).json();
           if (method === 'fetcherSearch') return (await api('fetcher/search?' + new URLSearchParams({ q: params.query, page: params.page || 1 }))).json();
-          if (method === 'fetcherTitle') return (await api('fetcher/titles/' + encodeURIComponent(params.id))).json();
-          if (method === 'fetcherAdd') return (await api('download-jobs', 'POST', params)).json();
+          if (method === 'fetcherTitle') { const title = await (await api('fetcher/titles/' + encodeURIComponent(params.id))).json(); titles.set(title.id, title); return title; }
+          if (method === 'fetcherAdd') {
+            const result = await (await api('download-jobs', 'POST', { titleId: params.titleId, episodeIds: params.episodeIds, series: params.series })).json();
+            const title = titles.get(params.titleId);
+            for (const episode of title?.episodes || []) if (params.episodeIds.includes(episode.id)) {
+              const sourceId = title.id + '/' + episode.id;
+              if (!requests.some(request => request.sourceId === sourceId)) requests.push({ sourceId, destination: params.destination || 'phone', copyWhenReady: params.copyWhenReady !== false });
+              if (!catalog.some(file => file.sourceId === sourceId)) catalog.push({ id: 'pending:' + sourceId, sourceId, series: params.series, title: title.title, season: 'Pending downloads', episode: Number(episode.number), filename: 'Episode ' + episode.number, bytes: 0, locations: [{ id: 'pending:' + sourceId, kind: 'pending', label: 'Downloading on PC', available: false }] });
+            }
+            rememberCatalog(); rememberRequests(); return result;
+          }
           return (await api('download-jobs/control', 'POST', params)).json();
         }
         case 'addQueue': {

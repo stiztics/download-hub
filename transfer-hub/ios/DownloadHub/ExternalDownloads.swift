@@ -43,6 +43,7 @@ struct ExternalDownload: Codable, Identifiable {
         if let storageError { throw HubError.message(storageError) }
         guard let server = source.server, let fileID = source.fileID else { throw HubError.message("No PC copy is available.") }
         _ = try DeviceLibrary.shared.resolveDrive(driveID)
+        if episode.locations.contains(where: { $0.driveID == driveID && DeviceLibrary.shared.available($0) }) { return }
         if jobs.contains(where: { $0.episodeID == episode.id && $0.driveID == driveID && $0.status != "downloaded" }) { return }
         jobs.append(ExternalDownload(id: UUID().uuidString, episodeID: episode.id, file: episode.file, server: server, fileID: fileID, driveID: driveID))
         try save()
@@ -58,7 +59,7 @@ struct ExternalDownload: Codable, Identifiable {
         jobs[index].status = "paused"; tasks[id]?.cancel(); try? save()
     }
     func resume(_ id: String) throws {
-        guard credentials != nil, let index = jobs.firstIndex(where: { $0.id == id }), ["paused", "failed"].contains(jobs[index].status) else { throw HubError.message("Connect the PC and drive before resuming.") }
+        guard let credentials, let index = jobs.firstIndex(where: { $0.id == id }), jobs[index].server == credentials.server, ["paused", "failed"].contains(jobs[index].status) else { throw HubError.message("Connect the original PC and drive before resuming.") }
         guard tasks[id] == nil else { throw HubError.message("The transfer is still pausing. Try again shortly.") }
         jobs[index].status = "queued"; jobs[index].error = nil; try save(); pump()
     }
@@ -127,7 +128,8 @@ struct ExternalDownload: Codable, Identifiable {
             jobs[index].received += Int64(data.count); try save()
         }
         jobs[index].status = "verifying"; try save()
-        let digest = try await Task.detached(priority: .utility) { try fileDigest(partial) }.value
+        let worker = Task.detached(priority: .utility) { try fileDigest(partial) }
+        let digest = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
         try Task.checkCancellation()
         guard digest == checksum.sha256 else {
             try output.close(); try FileManager.default.removeItem(at: partial); jobs[index].received = 0
@@ -140,7 +142,7 @@ struct ExternalDownload: Codable, Identifiable {
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: partial, to: target)
         let driveName = DeviceLibrary.shared.state.drives.first(where: { $0.id == job.driveID })?.name ?? "External folder"
-        try DeviceLibrary.shared.setChecksum(locationID: "pc:\(job.server.absoluteString):\(job.fileID)", checksum: digest)
+        try DeviceLibrary.shared.setChecksum(locationID: "pc:\(job.server.absoluteString):\(job.fileID)", checksum: digest, fingerprint: job.file.fingerprint)
         try DeviceLibrary.shared.upsert(job.file, location: EpisodeLocation(id: "drive:\(job.driveID):\(relative)", kind: "drive", label: "On SSD · \(driveName)", driveID: job.driveID, relativePath: relative, checksum: digest))
         jobs[index].status = "downloaded"; jobs[index].error = nil; try save()
     }
