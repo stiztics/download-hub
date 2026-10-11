@@ -1,6 +1,6 @@
 # Native iPhone testing from Windows
 
-The iPhone app uses a **shared web interface in a WKWebView shell**, with native Swift code for background downloads, Keychain and file export. The files in `phone/` are both bundled into the IPA and tested on Windows. The app/test source is public at https://github.com/stiztics/download-hub. The Release iPhone IPA and simulator bundle have compiled successfully on GitHub's standard macOS runner. Native simulator checks are being validated; physical iPhone and SideStore behavior still require device testing. No Appetize session has been run.
+The iPhone app uses a **shared web interface in a WKWebView shell**, with native Swift code for background downloads, Keychain and file export. The files in `phone/` are both bundled into the IPA and tested on Windows. The app/test source is public at https://github.com/stiztics/download-hub. The first unsigned IPA is available in the [v0.1.0 release](https://github.com/stiztics/download-hub/releases/tag/v0.1.0) for SideStore installation. The Release iPhone IPA and simulator bundle have compiled successfully on GitHub's standard macOS runner. Native simulator checks are being validated; physical iPhone and SideStore behavior still require device testing. No Appetize session has been run.
 
 ## Frequent free testing on Windows
 
@@ -34,7 +34,7 @@ Playwright WebKit is a desktop test engine, not Safari on iOS 26 and not an iPho
 2. Manually run **iOS simulator tests** from Actions in the public app/test repository. That test workflow has no automatic push/PR trigger. **Build iPhone IPA** runs on native/shared-interface changes on `main`, or on manual dispatch, and returns the unsigned IPA plus its SHA-256 checksum.
 3. A standard `macos-26` runner builds with XcodeGen/Xcode and runs the open-source Maestro CLI. No Maestro Cloud account/API key or Apple signing credentials are needed for the simulator.
 4. Download the `download-hub-simulator` artifact: build logs, selected device/runtime, JUnit reports, screenshots, and `DownloadHub-simulator.zip`. Artifacts expire after one day.
-5. Inspect failures/screenshots, fix locally, update the repository, and run again. The first Mac run must validate Swift compilation and the prepared scripts; Windows checks cannot guarantee those succeed.
+5. Inspect failures/screenshots, fix locally, update the repository, and run again. The first Mac run validated Swift compilation; native flow checks remain pending. Windows checks cannot guarantee native execution succeeds.
 
 The workflow prefers an available iPhone 15 Pro/iOS 26 simulator and records the actual device/runtime. Hosted runner images may offer different devices or runtimes; a fallback is explicitly recorded in `test-device.json`. Simulator results do not prove behavior on the physical iPhone.
 
