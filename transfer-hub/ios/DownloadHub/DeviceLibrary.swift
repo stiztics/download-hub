@@ -222,9 +222,19 @@ struct PendingPCRequest: Codable, Identifiable {
     func snapshot() throws -> [[String: Any]] {
         if let loadError { throw HubError.message(loadError) }
         try recoverTransfers()
+        // Resolve each provider bookmark once per snapshot, rather than once
+        // per episode in a large SSD library.
+        var roots: [String: URL] = [:]
+        for drive in state.drives {
+            if let root = try? resolveDrive(drive.id), beginFolderAccess(root) { roots[drive.id] = root }
+        }
+        defer { for root in roots.values { root.stopAccessingSecurityScopedResource() } }
         return state.episodes.map { item in
             let locations = item.locations.map { source -> [String: Any] in
-                ["id": source.id, "kind": source.kind, "label": source.label, "available": available(source)]
+                let accessible: Bool
+                if source.kind == "drive" { accessible = source.driveID.flatMap { roots[$0] }.flatMap { root in source.relativePath.map { FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path) } } ?? false }
+                else { accessible = available(source) }
+                return ["id": source.id, "kind": source.kind, "label": source.label, "available": accessible]
             }
             return ["id": item.id, "series": item.file.series, "title": item.file.title, "season": item.file.season, "episode": item.file.episode as Any? ?? NSNull(), "filename": item.file.filename, "bytes": item.file.bytes, "position": item.position, "locations": locations]
         }
