@@ -1,0 +1,37 @@
+name: DownloadHub
+configs:
+  Debug: debug
+  Release: release
+  SimulatorTest: debug
+options:
+  bundleIdPrefix: local.downloadhub
+  deploymentTarget:
+    iOS: '17.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+targets:
+  DownloadHub:
+    type: application
+    platform: iOS
+    sources:
+      - DownloadHub
+      - path: ../phone
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.downloadhub.personal
+        TARGETED_DEVICE_FAMILY: '1'
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: DownloadHub/Info.plist
+        CODE_SIGNING_ALLOWED: NO
+      configs:
+        SimulatorTest:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: '$(inherited) HUB_TESTING'
+          INFOPLIST_FILE: testing/Info-Simulator.plist
+    scheme:
+      gatherCoverageData: false

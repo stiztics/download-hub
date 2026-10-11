@@ -1,0 +1,43 @@
+appId: local.downloadhub.personal
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    arguments:
+      hubTestServer: ${HUB_TEST_SERVER}
+      hubTestCode: '00000000'
+- assertVisible: Connect to PC
+- tapOn: Connect to PC
+- assertVisible: Pairing code is invalid or expired. Generate another on the PC.
+- stopApp
+- launchApp:
+    arguments:
+      hubTestServer: ${HUB_TEST_SERVER}
+      hubTestCode: ${HUB_TEST_CODE}
+- tapOn: Connect to PC
+- extendedWaitUntil:
+    visible: Browse Demo Series
+    timeout: 30000
+- takeScreenshot: library
+- tapOn: Browse Demo Series
+- tapOn: Select all
+- tapOn: Add to queue
+- extendedWaitUntil:
+    visible: Pickup queue
+    timeout: 10000
+- tapOn: Download queued files
+- tapOn:
+    text: Downloaded
+    index: 0
+- extendedWaitUntil:
+    visible: '2 files .* saved'
+    timeout: 90000
+- assertVisible: '.*SHA-256 verified'
+- takeScreenshot: downloaded
+- stopApp
+- launchApp
+- tapOn:
+    text: Downloaded
+    index: 0
+- assertVisible: '2 files .* saved'
+- takeScreenshot: persisted-downloads

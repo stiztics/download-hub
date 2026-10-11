@@ -1,0 +1,13 @@
+appId: local.downloadhub.personal
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    arguments:
+      hubDemo: true
+- assertVisible: Demo data
+- tapOn: Browse Demo Series
+- tapOn: Select all
+- tapOn: Add to queue
+- assertVisible: Demo — file transfers unavailable
+- takeScreenshot: demo-queue

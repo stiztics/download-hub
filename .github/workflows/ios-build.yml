@@ -1,0 +1,42 @@
+name: Build iPhone IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-build.yml'
+      - 'transfer-hub/ios/**'
+      - 'transfer-hub/phone/**'
+permissions:
+  contents: read
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build unsigned iPhone app
+        run: bash transfer-hub/ios/build-ipa.sh
+      - name: Validate IPA and bundled interface
+        run: |
+          unzip -t transfer-hub/ios/build/DownloadHub-unsigned.ipa
+          unzip -l transfer-hub/ios/build/DownloadHub-unsigned.ipa | grep 'Payload/DownloadHub.app/phone/index.html'
+          unzip -l transfer-hub/ios/build/DownloadHub-unsigned.ipa | grep 'Payload/DownloadHub.app/phone/bridge.js'
+          if unzip -l transfer-hub/ios/build/DownloadHub-unsigned.ipa | grep -q 'windows-host.js'; then
+            echo 'Windows test adapter must not be shipped in the IPA' >&2
+            exit 1
+          fi
+          shasum -a 256 transfer-hub/ios/build/DownloadHub-unsigned.ipa > transfer-hub/ios/build/DownloadHub-unsigned.ipa.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-hub-ipa
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            transfer-hub/ios/build/DownloadHub-unsigned.ipa
+            transfer-hub/ios/build/DownloadHub-unsigned.ipa.sha256

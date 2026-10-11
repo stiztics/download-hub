@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#151816"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'"><title>Download Hub</title><link rel="stylesheet" href="style.css"><script src="bridge.js" defer></script><script src="app.js" defer></script></head>
+<body>
+<header><strong><span>↘</span> Download Hub</strong><span id="connection">Connecting…</span></header>
+<div id="platform-note" class="note" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<main>
+  <section id="pair-view" hidden>
+    <p class="eyebrow">FROM YOUR PC, TO YOUR POCKET</p><h1>Your downloads.<br>With you.</h1><p class="muted">Connect your PC, choose episodes, and keep them offline.</p>
+    <form id="pair-form"><label for="server">PC address</label><input id="server" type="url" placeholder="https://your-pc.your-network.ts.net" autocomplete="off" autocapitalize="none" required><label for="code">Pairing code</label><input id="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" placeholder="Eight digits from your PC" autocomplete="off" required><button id="connect" class="primary">Connect to PC</button></form>
+    <p class="muted small">Generate a code on your PC. Connect Tailscale on both devices and keep the PC awake during transfers.</p><button id="demo" class="secondary" hidden>Try demo library</button>
+  </section>
+  <section id="library-view" hidden><div class="heading"><div><p class="eyebrow">READY FOR PICKUP</p><h1>Your library</h1></div><button id="refresh" class="secondary" aria-label="Refresh library">↻</button></div><p id="library-summary" class="muted small"></p><input id="search" type="search" aria-label="Search collection" placeholder="Search collection"><div id="series-list"></div><div id="episodes" hidden><div class="heading"><button id="back" class="text">← All series</button><button id="select-all" class="secondary">Select all</button></div><h2 id="series-name"></h2><div id="episode-list"></div></div><p id="library-empty" class="empty" hidden>No matching downloads</p></section>
+  <section id="queue-view" hidden><p class="eyebrow">FROM YOUR DESKTOP</p><h1>Pickup queue</h1><p class="muted small">Keep the PC awake and Tailscale connected. Downloads may use cellular data.</p><p id="demo-warning" class="note" hidden>Demo — file transfers unavailable</p><button id="start" class="primary">Download queued files</button><div id="queue-list"></div><p id="queue-empty" class="empty" hidden>Your queue is clear</p></section>
+  <section id="fetcher-view" hidden>
+    <div class="heading"><div><p class="eyebrow">DOWNLOAD ON YOUR PC</p><h1>Fetch anime</h1></div><button id="fetcher-refresh" class="secondary" aria-label="Refresh PC downloads">↻</button></div>
+    <p class="muted small">Search and send episodes to the Windows runner. Finished files appear in Library, ready to transfer to this phone.</p>
+    <p id="fetcher-status" class="note" role="status">Checking the PC runner…</p>
+    <p class="muted small">Japanese audio · highest available quality. Keep the runner and ProtonVPN running on the PC. Any verification prompt needs attention on the PC.</p>
+    <form id="fetcher-search-form"><label for="fetcher-query">Search AnimePahe</label><input id="fetcher-query" type="search" maxlength="200" placeholder="Search anime…" required><button id="fetcher-search" class="primary">Search</button></form>
+    <p id="fetcher-notice" class="muted small" aria-live="polite" hidden></p><div id="fetcher-results"></div>
+    <div id="fetcher-title" class="card" hidden><h2 id="fetcher-title-name"></h2><label for="fetcher-series">Collection folder</label><input id="fetcher-series" maxlength="150"><div class="heading"><p id="fetcher-selected" class="muted small"></p><button id="fetcher-select-all" class="secondary">Select all episodes</button></div><div id="fetcher-episodes"></div><button id="fetcher-add" class="primary">Download selected to PC</button></div>
+    <h2>PC downloads</h2><div class="actions"><button id="fetcher-pause" data-fetcher-action="pause">Pause PC downloads</button><button id="fetcher-resume" data-fetcher-action="resume">Resume PC downloads</button></div><div id="fetcher-jobs"></div>
+    <p class="muted small">The runner keeps working when this app closes. Pausing a PC download may restart that file when resumed. Phone transfers use the separate Queue tab.</p>
+  </section>
+  <section id="downloaded-view" hidden><p class="eyebrow">WITH YOU, OFFLINE</p><h1>Downloaded</h1><p id="saved-summary" class="muted small"></p><div id="saved-list"></div><p id="saved-empty" class="empty" hidden>Finished downloads will appear here. Playback is planned for later.</p></section>
+  <section id="settings-view" hidden><p class="eyebrow">YOUR CONNECTION</p><h1>Settings</h1><div class="card"><h2>Connected PC</h2><p id="pc-address" class="muted break"></p><button id="disconnect" class="danger secondary">Disconnect PC</button></div><div class="card"><h2>Downloads</h2><p class="muted small">Two files at a time. Cellular transfers are allowed. Finished files are verified before saving. Export a file from Downloaded to open it in another app.</p><p id="engine-note" class="muted small"></p></div></section>
+</main>
+<div id="selection" hidden><span id="selected-count"></span><button id="clear" class="text">Clear</button><button id="add" class="primary">Add to queue</button></div>
+<nav aria-label="App tabs"><button data-tab="library" class="active">Library</button><button data-tab="fetcher">Fetch</button><button data-tab="queue">Queue</button><button data-tab="downloaded">Downloaded</button><button data-tab="settings">Settings</button></nav>
+<dialog id="confirm-dialog"><h2 id="confirm-title"></h2><p id="confirm-text" class="muted"></p><div class="heading"><button id="confirm-cancel" class="secondary">Cancel</button><button id="confirm-yes" class="secondary danger">Confirm</button></div></dialog>
+</body></html>

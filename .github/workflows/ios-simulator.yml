@@ -1,0 +1,43 @@
+name: iOS simulator tests
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ios-simulator-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install build and test tools
+        run: |
+          brew install xcodegen
+          curl --fail --location --retry 3 https://github.com/mobile-dev-inc/maestro/releases/download/cli-2.11.0/maestro.zip -o "$RUNNER_TEMP/maestro.zip"
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP/maestro-tools"
+          echo "$RUNNER_TEMP/maestro-tools/maestro/bin" >> "$GITHUB_PATH"
+      - name: Test transfer backend
+        run: node --test transfer-hub/test/*.test.mjs
+      - name: Build simulator bundle
+        run: bash transfer-hub/ios/build-simulator.sh
+      - name: Run native UI and transfer tests
+        run: bash transfer-hub/ios/test-simulator.sh
+      - name: Collect test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-hub-simulator
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            transfer-hub/ios/build/DownloadHub-simulator.zip
+            transfer-hub/ios/build/reports/

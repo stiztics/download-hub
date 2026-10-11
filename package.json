@@ -1,0 +1,19 @@
+{
+  "name": "download-hub-ios-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test transfer-hub/test/*.test.mjs",
+    "test:ui": "playwright test --config transfer-hub/playwright.config.mjs",
+    "test:ui:repeat": "playwright test --config transfer-hub/playwright.config.mjs --repeat-each=5",
+    "test:ui:report": "playwright show-report transfer-hub/.test-results/report",
+    "hub:demo": "node transfer-hub/testing/preview.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
+  }
+}

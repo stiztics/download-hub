@@ -1,0 +1,178 @@
+import SwiftUI
+import WebKit
+import Combine
+import UIKit
+
+@MainActor struct PhoneWebView: UIViewRepresentable {
+    let model: HubModel
+    func makeCoordinator() -> PhoneBridge { PhoneBridge(model: model) }
+    func makeUIView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.userContentController.add(context.coordinator, name: "hub")
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.isOpaque = false
+        view.backgroundColor = UIColor(red: 0.08, green: 0.10, blue: 0.09, alpha: 1)
+        view.scrollView.backgroundColor = view.backgroundColor
+        view.navigationDelegate = context.coordinator
+        context.coordinator.webView = view
+        if let root = Bundle.main.resourceURL?.appendingPathComponent("phone", isDirectory: true) {
+            view.loadFileURL(root.appendingPathComponent("index.html"), allowingReadAccessTo: root)
+        }
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+    static func dismantleUIView(_ view: WKWebView, coordinator: PhoneBridge) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "hub")
+        coordinator.subscription?.cancel()
+    }
+}
+
+// The page gets only named commands and sanitized metadata. Credentials and
+// physical file URLs never leave native code. External navigation is refused.
+@MainActor final class PhoneBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    let model: HubModel
+    weak var webView: WKWebView?
+    var subscription: AnyCancellable?
+    private var root: URL? { Bundle.main.resourceURL?.appendingPathComponent("phone", isDirectory: true) }
+    init(model: HubModel) {
+        self.model = model
+        super.init()
+        #if HUB_TESTING && targetEnvironment(simulator)
+        if UserDefaults.standard.bool(forKey: "hubDemo") { model.openDemo() }
+        #endif
+        subscription = TransferManager.shared.$transfers.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.webView?.evaluateJavaScript("window.dispatchEvent(new Event('hub-transfer-update'))", completionHandler: nil) }
+        }
+    }
+    private func trusted(_ url: URL?) -> Bool {
+        guard let url, url.isFileURL, let root else { return false }
+        return url.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/")
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(trusted(navigationAction.request.url) ? .allow : .cancel)
+    }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, trusted(webView?.url), let input = message.body as? [String: Any], let id = input["id"] as? String, id.count <= 40, let method = input["method"] as? String else { return }
+        let params = input["params"] as? [String: Any] ?? [:]
+        Task { @MainActor in
+            do { reply(id, value: try await handle(method, params: params)) }
+            catch { reply(id, error: error.localizedDescription) }
+        }
+    }
+    private func reply(_ id: String, value: Any? = nil, error: String? = nil) {
+        var output: [String: Any] = ["id": id, "ok": error == nil]
+        if let error { output["error"] = error } else { output["value"] = value ?? NSNull() }
+        guard let data = try? JSONSerialization.data(withJSONObject: output), let json = String(data: data, encoding: .utf8) else { return }
+        webView?.evaluateJavaScript("window.__hubReply(\(json))", completionHandler: nil)
+    }
+    private func json<T: Encodable>(_ value: T) throws -> Any { try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) }
+    private func api() throws -> HubAPI {
+        guard let credentials = model.credentials, !model.demo else { throw HubError.message("Connect your PC first.") }
+        return HubAPI(credentials: credentials)
+    }
+    private func connection() -> [String: Any] {
+        var value: [String: Any] = ["paired": model.credentials != nil, "server": model.demo ? "Demo library" : model.credentials?.server.absoluteString ?? "", "platform": "ios", "demo": model.demo, "canDemo": false]
+        #if HUB_TESTING && targetEnvironment(simulator)
+        value["canDemo"] = true
+        value["testServer"] = UserDefaults.standard.string(forKey: "hubTestServer") ?? ""
+        value["testCode"] = UserDefaults.standard.string(forKey: "hubTestCode") ?? ""
+        #endif
+        return value
+    }
+    private func transfers() -> [[String: Any]] {
+        TransferManager.shared.transfers.map { row in
+            ["id": row.id, "fileId": row.entry.fileId, "filename": row.entry.filename, "bytes": row.entry.bytes, "status": row.status, "received": row.received, "error": row.error ?? "", "verifiedSHA256": row.verifiedSHA256 ?? "", "canExport": TransferManager.shared.fileURL(row) != nil]
+        }
+    }
+    private func transfer(_ params: [String: Any]) throws -> LocalTransfer {
+        guard let id = params["id"] as? String, let row = TransferManager.shared.transfers.first(where: { $0.id == id }) else { throw HubError.message("Transfer not found.") }
+        return row
+    }
+    private func handle(_ method: String, params: [String: Any]) async throws -> Any {
+        switch method {
+        case "connection": return connection()
+        case "pair":
+            guard let server = params["server"] as? String, let code = params["code"] as? String else { throw HubError.message("Enter a PC address and pairing code.") }
+            let previousToken = model.credentials?.token
+            model.message = nil
+            await model.pair(serverText: server, code: code)
+            if let message = model.message, model.credentials?.token == previousToken { throw HubError.message(message) }
+            if model.credentials == nil { throw HubError.message(model.message ?? "Pairing failed.") }
+            return connection()
+        case "library":
+            if model.demo { return try json(model.files) }
+            let library: LibraryResponse = try await api().send("library")
+            return try json(library.files)
+        case "queue":
+            if model.demo { return try json(model.queue) }
+            let queue: [QueueEntry] = try await api().send("queue")
+            return try json(queue)
+        case "addQueue":
+            guard let ids = params["fileIds"] as? [String], !ids.isEmpty, ids.count <= 500 else { throw HubError.message("Select files to queue.") }
+            if model.demo { model.selection = Set(ids); await model.addSelection(); return try json(model.queue) }
+            let queue: [QueueEntry] = try await api().send("queue", method: "POST", body: JSONSerialization.data(withJSONObject: ["fileIds": ids]))
+            return try json(queue)
+        case "transfers": return transfers()
+        case "fetcherStatus":
+            let status: FetcherStatusResponse = try await api().send("download-jobs")
+            return try json(status)
+        case "fetcherSearch":
+            guard let query = params["query"] as? String, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, query.count <= 200, let page = params["page"] as? Int, (1...1000).contains(page) else { throw HubError.message("Enter an anime name and a valid search page.") }
+            let response: FetcherSearchResponse = try await api().send("fetcher/search", query: [URLQueryItem(name: "q", value: query), URLQueryItem(name: "page", value: String(page))], timeout: 240)
+            return try json(response)
+        case "fetcherTitle":
+            guard let id = params["id"] as? String, id.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else { throw HubError.message("Invalid title.") }
+            let response: FetcherTitleResponse = try await api().send("fetcher/titles/" + id, timeout: 240)
+            return try json(response)
+        case "fetcherAdd":
+            guard let titleId = params["titleId"] as? String, titleId.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil, let episodeIds = params["episodeIds"] as? [String], !episodeIds.isEmpty, episodeIds.count <= 2000, episodeIds.allSatisfy({ $0.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil }), let series = params["series"] as? String, !series.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, series.count <= 150 else { throw HubError.message("Select episodes and enter a collection folder name.") }
+            let response: FetcherAddResponse = try await api().send("download-jobs", method: "POST", body: JSONSerialization.data(withJSONObject: ["titleId": titleId, "episodeIds": episodeIds, "series": series]), timeout: 240)
+            return try json(response)
+        case "fetcherControl":
+            guard let action = params["action"] as? String, ["pause", "resume", "cancel", "retry", "prioritize"].contains(action) else { throw HubError.message("Invalid PC queue action.") }
+            var input: [String: Any] = ["action": action]
+            if ["cancel", "retry", "prioritize"].contains(action) {
+                guard let id = params["id"] as? String, id.range(of: "^[a-f0-9]{24}$", options: .regularExpression) != nil else { throw HubError.message("Invalid PC download job.") }
+                input["id"] = id
+            }
+            let response: FetcherStatusResponse = try await api().send("download-jobs/control", method: "POST", body: JSONSerialization.data(withJSONObject: input), timeout: 240)
+            return try json(response)
+        case "start":
+            if model.demo { throw HubError.message("Demo — file transfers unavailable") }
+            let queue: [QueueEntry] = try await api().send("queue")
+            TransferManager.shared.enqueue(queue.filter { $0.status != "downloaded" })
+            return transfers()
+        case "pause":
+            let row = try transfer(params)
+            guard row.status == "downloading" else { throw HubError.message("This transfer is not downloading.") }
+            TransferManager.shared.pause(row.id); return transfers()
+        case "resume":
+            let row = try transfer(params)
+            guard ["paused", "failed"].contains(row.status), model.credentials != nil else { throw HubError.message("Connect the PC before resuming.") }
+            TransferManager.shared.resume(row.id); return transfers()
+        case "delete":
+            let row = try transfer(params)
+            guard row.status == "downloaded" else { throw HubError.message("Only a finished file can be deleted here.") }
+            TransferManager.shared.remove(row.id); return transfers()
+        case "export":
+            let row = try transfer(params)
+            guard row.status == "downloaded", let file = TransferManager.shared.fileURL(row), var presenter = webView?.window?.rootViewController else { throw HubError.message("Saved file is unavailable.") }
+            while let presented = presenter.presentedViewController { presenter = presented }
+            let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+            sheet.popoverPresentationController?.sourceView = webView
+            sheet.popoverPresentationController?.sourceRect = webView?.bounds ?? .zero
+            presenter.present(sheet, animated: true)
+            return ["exported": true]
+        case "disconnect": model.disconnect(); return connection()
+        case "demo":
+            #if HUB_TESTING && targetEnvironment(simulator)
+            model.openDemo(); return connection()
+            #else
+            throw HubError.message("Demo is available only in simulator test builds.")
+            #endif
+        default: throw HubError.message("Unsupported app command.")
+        }
+    }
+}

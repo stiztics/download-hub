@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#151816"><title>Download Hub</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark">↘</span><span>Download<br><strong>Hub</strong></span></a>
+    <span class="nav-label">YOUR COLLECTION</span>
+    <button class="nav-item active" data-view="library"><span>▦</span> Library <span id="nav-count" class="nav-count">—</span></button>
+    <button class="nav-item" data-view="queue"><span>⇄</span> Phone queue <span id="queue-count" class="nav-count">0</span></button>
+    <button class="nav-item" data-view="fetcher"><span>↓</span> Fetch anime</button>
+    <a class="nav-item" href="/phone" target="_blank" rel="noopener"><span>▯</span> Phone preview <span>↗</span></a>
+    <div class="sidebar-bottom"><div class="device-icon">▯</div><strong>iPhone 15 Pro</strong><p id="device-status">Ready to pair</p><button id="pair-button" class="button subtle">Pair iPhone <span>↗</span></button><small>Files stay on your PC.<br>Download them when you're ready.</small></div>
+  </aside>
+  <main>
+    <header><div class="mobile-brand">↘ Download Hub</div><span class="eyebrow" id="breadcrumb">YOUR DOWNLOADS / LIBRARY</span><span class="connection" id="connection"><i></i> Connecting</span></header>
+    <div id="toast" role="status" aria-live="polite" hidden></div>
+    <section id="pair-gate" hidden><span class="eyebrow">YOUR PERSONAL LIBRARY</span><h1>Bring your downloads<br>with you.</h1><p>Enter the pairing code from your PC to access your collection.</p><form id="pair-form"><label for="pair-code">Pairing code</label><input id="pair-code" name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="off" placeholder="12345678" required><button class="button primary" type="submit">Connect this device →</button></form><p class="muted">Keep your PC awake during transfers.</p></section>
+    <div id="workspace" hidden>
+      <section class="hero"><div><span class="eyebrow" id="hero-label">FROM YOUR PC, TO YOUR POCKET</span><h1 id="heading">Your library<span class="accent">.</span></h1><p id="intro">Pick a few episodes. Take them with you.</p></div><button id="refresh-button" class="button subtle">↻ <span>Refresh library</span></button></section>
+      <div class="preview-note" id="preview-note" hidden><strong>Phone browser preview</strong><span>Real library and queue. Native background downloads will be tested on your iPhone.</span></div>
+      <nav class="phone-tabs" aria-label="Phone views"><button class="active" data-view="library">Library</button><button data-view="queue">Pickup queue <span id="phone-queue-count">0</span></button><button data-view="fetcher">Fetch anime</button></nav>
+      <section id="fetcher-view" hidden>
+        <p id="fetcher-status" role="status">Checking the PC fetcher…</p>
+        <p class="muted">Japanese audio · highest available quality · VPN required on the PC. Verification prompts appear on the PC.</p>
+        <form id="fetcher-search-form" class="library-toolbar"><label class="search"><input id="fetcher-query" type="search" maxlength="200" placeholder="Search AnimePahe…" aria-label="Search AnimePahe" required></label><button class="button primary" type="submit">Search</button></form>
+        <div id="fetcher-results"></div>
+        <section id="fetcher-title" hidden><h2 id="fetcher-title-name"></h2><label>Collection folder <input id="fetcher-series" maxlength="150"></label><p><button id="fetcher-select-all" class="button subtle">Select all episodes</button></p><div id="fetcher-episodes" class="fetcher-episodes"></div><p><button id="fetcher-add" class="button primary">Download selected to PC</button></p></section>
+        <div class="section-title"><h2>PC downloads</h2><div><button class="button subtle" data-fetcher-control="pause">Pause all</button> <button class="button subtle" data-fetcher-control="resume">Resume</button></div></div>
+        <div id="fetcher-jobs"></div>
+        <p class="muted">Completed files appear in Library. Pausing an active browser transfer restarts that file when resumed.</p>
+      </section>
+      <section id="library-view">
+        <div class="metrics"><div><span>READY TO DOWNLOAD</span><strong id="file-total">—</strong><small>completed files</small></div><div><span>ON YOUR DESKTOP</span><strong id="byte-total">—</strong><small>available to pick up</small></div><div><span>YOUR COLLECTION</span><strong id="series-total">—</strong><small>series &amp; movies</small></div></div>
+        <div class="library-toolbar"><label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search your collection…" aria-label="Search collection"></label><span id="result-count" class="muted"></span></div>
+        <div id="series-grid" class="series-grid"></div>
+        <section id="season-panel" class="season-panel" hidden><div class="section-title"><div><button id="back-button" class="text-button">← All series</button><h2 id="series-heading"></h2></div><button id="select-visible" class="button subtle">Select all shown</button></div><div id="season-list"></div></section>
+        <div id="empty-library" class="empty" hidden><span>↘</span><h2>No matching downloads</h2><p>Try a different search, or finish a download on your PC.</p></div>
+        <p id="unavailable" class="muted" hidden></p>
+      </section>
+      <section id="queue-view" hidden><div class="queue-summary"><div><span class="eyebrow">READY WHEN YOU ARE</span><h2 id="queue-heading">Your next watch</h2><p id="queue-summary"></p></div><span class="pill">PC must stay awake</span></div><div id="queue-list"></div><div id="empty-queue" class="empty" hidden><span>⇄</span><h2>Your queue is clear</h2><p>Select episodes in your library to prepare your next download.</p><button class="button primary" data-view="library">Browse library →</button></div><p class="muted queue-footnote">A browser download starts when you tap Download. Only the native app can report that a file was saved on your iPhone.</p></section>
+    </div>
+    <footer><span>YOUR FILES. YOUR DEVICES.</span><span>Desktop → iPhone <span class="accent">↗</span></span></footer>
+  </main>
+  <div id="selection-bar" class="selection-bar" hidden><div><strong id="selection-count"></strong><span id="selection-size"></span></div><button id="clear-selection" class="text-button">Clear</button><button id="send-button" class="button primary">Send to iPhone <span>↗</span></button></div>
+  <dialog id="pair-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close pairing dialog">×</button></form><span class="eyebrow">CONNECT YOUR IPHONE</span><h2>Your private pickup point.</h2><p>In the iPhone app, enter your PC’s HTTPS address and this one-time pairing code.</p><div id="generated-code" class="pairing-code"></div><p id="code-expiry" class="muted"></p><div class="info-box">Local development is running now. Remote phone access will use Tailscale Serve. The address must be HTTPS.</div><p class="muted">Pairing a replacement phone revokes the previous phone’s access.</p><button id="revoke-button" class="button subtle danger">Disconnect paired phone</button></dialog>
+</body></html>

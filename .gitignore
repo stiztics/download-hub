@@ -1,0 +1,6 @@
+node_modules/
+transfer-hub/.state/
+transfer-hub/.test-results/
+transfer-hub/ios/build/
+transfer-hub/ios/*.xcodeproj/
+Anime/
