@@ -7,7 +7,8 @@ appId: local.downloadhub.personal
       hubDemo: true
 - assertVisible: Demo data
 - tapOn: Browse Demo Series
+- tapOn: Browse season S01
 - tapOn: Select all
-- tapOn: Add to queue
+- tapOn: Transfer selected
 - assertVisible: Demo — file transfers unavailable
 - takeScreenshot: demo-queue

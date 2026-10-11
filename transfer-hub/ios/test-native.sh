@@ -11,7 +11,7 @@ cleanup() {
   rm -f "$fixture_connection"
 }
 trap cleanup EXIT
-node ../testing/fixture-server.mjs "$fixture_connection" > build/reports/native-fixture.log 2>&1 &
+HUB_FIXTURE_BYTES=8388608 node ../testing/fixture-server.mjs "$fixture_connection" > build/reports/native-fixture.log 2>&1 &
 fixture_pid=$!
 for attempt in {1..50}; do [[ -s "$fixture_connection" ]] && break; sleep 0.2; done
 [[ -s "$fixture_connection" ]] || { echo 'Fixture did not start' >&2; exit 1; }

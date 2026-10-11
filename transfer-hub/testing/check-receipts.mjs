@@ -1,14 +1,20 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 const connection = JSON.parse(await readFile(process.argv[2], 'utf8'));
-// Wait for asynchronous phone receipts; do not accept screenshots alone as proof.
-for (let attempt = 0; attempt < 30; attempt++) {
-  const response = await fetch(connection.server + '/api/queue', { headers: { Cookie: connection.cookie } });
-  assert.equal(response.status, 200);
-  const queue = await response.json();
-  if (queue.length === 2 && queue.every(entry => entry.status === 'downloaded' && entry.bytesCompleted === entry.bytes)) {
-    console.log('Both synthetic files reported fully downloaded.'); process.exit(0);
-  }
-  await new Promise(resolve => setTimeout(resolve, 1000));
+const stateFile = process.argv[3];
+assert.ok(stateFile, 'Pass the simulator native transfer history path');
+const rows = JSON.parse(await readFile(stateFile, 'utf8'));
+assert.equal(rows.length, 2);
+for (const row of rows) {
+  assert.equal(row.status, 'downloaded');
+  assert.equal(row.received, row.entry.bytes);
+  const bytes = await readFile(path.resolve(path.dirname(stateFile), '../../../Documents', row.localName));
+  assert.equal(bytes.length, row.entry.bytes);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), row.verifiedSHA256);
 }
-throw new Error('Simulator did not report both complete downloads');
+const response = await fetch(connection.server + '/api/queue', { headers: { Cookie: connection.cookie } });
+assert.equal(response.status, 200);
+assert.equal((await response.json()).length, 0, 'Phone-owned transfers do not require a desktop pickup queue');
+console.log('Both native files and checksums verified; desktop pickup queue remains empty.');

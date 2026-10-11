@@ -153,7 +153,7 @@
             for (const entry of catalog) for (const source of entry.locations) if (source.kind === 'pc') source.available = files.some(file => file.id === entry.id);
             for (const file of files) {
               const pending = catalog.find(entry => entry.sourceId === file.sourceId && file.sourceId && entry.locations.some(source => source.kind === 'pending'));
-              if (pending) { pending.id = file.id; pending.locations = []; }
+              if (pending) { const existing = catalog.find(entry => entry.id === file.id); pending.id = file.id; pending.locations = existing?.locations || []; catalog = catalog.filter(entry => entry === pending || entry.id !== file.id); }
               const previous = pending || catalog.find(entry => entry.id === file.id);
               const source = { id: 'pc:' + file.id, kind: 'pc', label: 'On PC', available: true };
               if (previous) { if (!previous.organized) Object.assign(previous, file); previous.locations = [...previous.locations.filter(location => location.kind !== 'pc'), source]; }

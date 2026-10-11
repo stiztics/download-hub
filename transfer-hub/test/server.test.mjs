@@ -30,6 +30,7 @@ test('Dragon Ball movie folders are exposed as movies without changing filenames
   const headers={Cookie:session.headers.get('set-cookie').split(';')[0]};
   const library=await (await fetch(base+'/api/library',{headers})).json();
   assert.equal(library.files[0].season,'Movie');
+  assert.equal(library.files[0].sourceId,'broly/one');
   assert.equal(library.files[0].filename,file);
   assert.equal(library.files[0].id,createHash('sha256').update('broly/one\0'+path.join(folder,file)).digest('hex'));
   const download=await fetch(base+'/api/files/'+library.files[0].id,{method:'HEAD',headers});
@@ -78,6 +79,8 @@ test('authenticated library, pairing, durable queue and byte-perfect resumed tra
   assert.equal(library.files.length, 1);
   assert.equal(library.unavailable, 3);
   assert.equal(library.files[0].physical, undefined);
+  assert.match(library.files[0].fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(library.files[0].mtime, undefined);
   const fileId = library.files[0].id;
   assert.equal((await post('/api/queue', { fileIds: ['unknown'] }, admin)).status, 400);
   await post('/api/queue', { fileIds: [fileId, fileId] }, admin);
@@ -106,6 +109,12 @@ test('authenticated library, pairing, durable queue and byte-perfect resumed tra
   assert.equal(invalid.headers.get('content-range'), `bytes */${payload.length}`);
   const checksum = await (await call(download + '/checksum', { headers: phone })).json();
   assert.equal(checksum.sha256, createHash('sha256').update(payload).digest('hex'));
+  await writeFile(path.join(libraryRoot, 'Series', 'Episode 01.mp4'), Buffer.alloc(payload.length, 42));
+  const changed = await (await call('/api/library', { headers: phone })).json();
+  assert.equal(changed.files[0].id, fileId, 'Logical identity survives replacement');
+  assert.notEqual(changed.files[0].fingerprint, library.files[0].fingerprint, 'Replacement changes the opaque file version');
+  const newChecksum = await (await call(download + '/checksum', { headers: phone })).json();
+  assert.notEqual(newChecksum.sha256, checksum.sha256);
   const progress = (value, headers) => call(`/api/queue/${queue[0].id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(value) });
   assert.equal((await progress({ status: 'downloaded', bytesCompleted: payload.length }, admin)).status, 403);
   assert.equal((await progress({ status: 'downloaded', bytesCompleted: 0 }, phone)).status, 400);

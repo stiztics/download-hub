@@ -203,7 +203,7 @@ import UIKit
         case "resume":
             if let id = params["id"] as? String, ExternalDownloads.shared.jobs.contains(where: { $0.id == id }) { try ExternalDownloads.shared.resume(id); return ExternalDownloads.shared.snapshot() }
             let row = try transfer(params)
-            guard ["paused", "failed"].contains(row.status), model.credentials != nil else { throw HubError.message("Connect the PC before resuming.") }
+            guard ["paused", "failed"].contains(row.status), model.credentials?.server == row.server else { throw HubError.message("Connect the original PC before resuming.") }
             TransferManager.shared.resume(row.id); return transfers()
         case "delete":
             let row = try transfer(params)

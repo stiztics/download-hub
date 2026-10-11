@@ -38,6 +38,7 @@ xcrun simctl install "$simulator_id" build/Simulator/Build/Products/SimulatorTes
 maestro --device "$simulator_id" test --format JUNIT --output build/reports/transfer.xml \
   --debug-output build/reports/maestro-transfer --test-output-dir build/reports/transfer-artifacts \
   -e "HUB_TEST_SERVER=$HUB_TEST_SERVER" -e "HUB_TEST_CODE=$HUB_TEST_CODE" maestro/transfer.yaml
-node ../testing/check-receipts.mjs "$fixture_connection"
+container=$(xcrun simctl get_app_container "$simulator_id" local.downloadhub.personal data)
+node ../testing/check-receipts.mjs "$fixture_connection" "$container/Library/Application Support/Transfers/transfers.json"
 maestro --device "$simulator_id" test --format JUNIT --output build/reports/demo.xml \
   --debug-output build/reports/maestro-demo --test-output-dir build/reports/demo-artifacts maestro/demo.yaml

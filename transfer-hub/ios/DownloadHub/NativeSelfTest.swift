@@ -25,7 +25,15 @@ import CoreVideo
                 guard let credentials = model.credentials else { throw HubError.message(model.message ?? "Pairing failed") }
                 let response: LibraryResponse = try await HubAPI(credentials: credentials).send("library")
                 try require(response.files.count == 2, "Fixture should contain two files")
-                try DeviceLibrary.shared.synchronize(response.files, server: credentials.server)
+                var handoffFiles = response.files
+                handoffFiles[0].sourceId = "generated/episode1"
+                try DeviceLibrary.shared.requestPC(title: FetcherTitleResponse(id: "generated", title: "Generated", episodes: [FetcherEpisode(id: "episode1", number: .number(1))]), episodeIDs: ["episode1"], series: "Generated", server: credentials.server, destination: "phone", copyWhenReady: true)
+                try require(DeviceLibrary.shared.state.episodes.count == 1, "Phone request did not create a pending episode")
+                try DeviceLibrary.shared.synchronize(handoffFiles, server: credentials.server)
+                let ready = DeviceLibrary.shared.readyRequests(handoffFiles, server: credentials.server)
+                try require(ready.count == 1 && ready[0].0.copyWhenReady, "Completed PC episode did not match the phone request")
+                try DeviceLibrary.shared.finishRequest(ready[0].0.id)
+                checks.append("phone-owned pending request resolves to the completed PC file")
                 let entries = response.files.map { file in QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: file.id, filename: file.filename, series: file.series, title: file.title, bytes: file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true, fingerprint: file.fingerprint) }
                 TransferManager.shared.stage(entries); TransferManager.shared.startWaiting()
                 try await waitFor("native iPhone transfers") { TransferManager.shared.transfers.filter { $0.status == "downloaded" }.count == 2 }

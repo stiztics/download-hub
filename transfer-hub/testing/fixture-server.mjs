@@ -14,7 +14,9 @@ export async function startFixture(options = {}) {
     const items = [];
     for (let episode = 1; episode <= 2; episode++) {
       const file = `Demo Episode ${episode}.bin`;
-      const payload = Buffer.alloc(2 * 1024 * 1024);
+      const requestedBytes = Number(options.bytes || process.env.HUB_FIXTURE_BYTES || 2 * 1024 * 1024);
+      if (!Number.isSafeInteger(requestedBytes) || requestedBytes < 1 || requestedBytes > 16 * 1024 * 1024) throw new Error('Invalid generated fixture size');
+      const payload = Buffer.alloc(requestedBytes);
       for (let offset = 0; offset < payload.length; offset++) payload[offset] = (offset + episode) % 251;
       await writeFile(path.join(libraryRoot, 'Demo', file), payload);
       items.push({ id: `demo-${episode}`, series: 'Demo Series', title: 'Test Season', code: 'S01', episode, folder: 'Demo', file, bytes: payload.length, status: 'complete' });

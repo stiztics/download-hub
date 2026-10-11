@@ -79,3 +79,39 @@ test('SSD catalog persists, exposes destination choices, and survives drive remo
     await test.info().attach('external-library', { path: screenshot, contentType: 'image/png' });
   } finally { await fixture.close(); }
 });
+
+test('phone request survives relaunch and transfers automatically after the PC finishes', async ({ page }) => {
+  let finished = false;
+  const fixture = await startFixture({ fetcherClient: async route => {
+    if (route === '/titles/generated') return { id: 'generated', title: 'Requested series', episodes: [{ id: 'episode1', number: 1 }] };
+    if (route === '/jobs') return { added: 1, skipped: 0 };
+    if (route === '/status') return { active: 0, paused: false, blocked: null, jobs: [] };
+    throw new Error('Unexpected generated runner request');
+  } });
+  try {
+    await page.route('**/api/library', async route => {
+      const response = await route.fetch(), body = await response.json();
+      if (finished) body.files[0].sourceId = 'generated/episode1';
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto(fixture.server + '/app/'); await pair(page, fixture);
+    await page.evaluate(async () => {
+      await Hub.call('fetcherTitle', { id: 'generated' });
+      await Hub.call('fetcherAdd', { titleId: 'generated', episodeIds: ['episode1'], series: 'Requested series', destination: 'phone', copyWhenReady: true });
+    });
+    await page.reload();
+    await expect(page.locator('#library-summary')).toContainText('3 episodes');
+    await page.getByRole('button', { name: 'Browse Requested series', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse season Pending downloads', exact: true }).click();
+    await expect(page.locator('#episode-list')).toContainText('Downloading on PC');
+    finished = true;
+    await page.getByRole('button', { name: 'Refresh library', exact: true }).click();
+    await page.getByRole('button', { name: 'Downloads', exact: true }).click();
+    await expect(page.locator('#saved-summary')).toContainText('1 files', { timeout: 20000 });
+    const catalog = await page.evaluate(() => Hub.call('library'));
+    expect(catalog).toHaveLength(2);
+    expect(catalog.some(file => file.locations.some(source => source.kind === 'phone'))).toBe(true);
+    const serverQueue = await (await fetch(fixture.server + '/api/queue', { headers: { Cookie: fixture.cookie } })).json();
+    expect(serverQueue).toHaveLength(0);
+  } finally { await fixture.close(); }
+});

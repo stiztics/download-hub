@@ -138,6 +138,7 @@ struct PendingPCRequest: Codable, Identifiable {
                 guard let result: ChecksumResponse = try? await HubAPI(credentials: credentials).send("files/\(file.id)/checksum"), result.sha256 == digest else { continue }
             }
             try setChecksum(locationID: sourceID, checksum: digest, fingerprint: file.fingerprint)
+            if let index = state.episodes.firstIndex(where: { $0.locations.contains { $0.localName == name } }), state.episodes[index].organized != true { state.episodes[index].file = file }
             try upsert(file, location: EpisodeLocation(id: "phone:\(name)", kind: "phone", label: "On iPhone", localName: name, checksum: digest))
         }
     }

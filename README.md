@@ -1,6 +1,18 @@
 # Native iPhone testing from Windows
 
-The iPhone app uses a **shared web interface in a WKWebView shell**, with native Swift code for background downloads, Keychain and file export. The files in `phone/` are both bundled into the IPA and tested on Windows. The app/test source is public at https://github.com/stiztics/download-hub. The first unsigned IPA is available in the [v0.1.0 release](https://github.com/stiztics/download-hub/releases/tag/v0.1.0) for SideStore installation. The Release iPhone IPA and simulator bundle have compiled successfully on GitHub's standard macOS runner. Native simulator checks are being validated; physical iPhone and SideStore behavior still require device testing. No Appetize session has been run.
+The iPhone owns its persistent library. Windows supplies downloads and file transfers. A shared interface runs in WKWebView, with Swift handling the catalog, Keychain, background downloads, Apple's AVKit player, document picking, verified copying and direct external-folder transfers. The files in `phone/` are bundled into the IPA and tested on Windows. Source and unsigned SideStore builds are published at https://github.com/stiztics/download-hub. Physical iPhone, external USB provider and SideStore behavior still require device testing. No Appetize session has been run.
+
+## Using the device library
+
+Library opens without pairing. Episodes are grouped by series and season with On iPhone, On PC and On SSD badges. PC metadata stays available offline, and phone organization survives refresh. Tap a local episode to play with Apple's native controls; playback position is retained. PC-only episodes open their details so you can queue a transfer. Apple codec support applies: unsupported videos remain importable/exportable but may not play.
+
+Use **Add SSD folder** to select a USB/SSD folder through Files. The app indexes videos without copying them, plays accessible files in place, and remembers the folder with a security-scoped bookmark. Reconnect and rescan after changing its contents; reselect the folder if iOS invalidates its bookmark. **Import files** or **Copy to iPhone** creates a verified offline copy. **Export to folder** writes an organized series/season copy and preserves the original. Existing destination filenames are refused. Deleting an iPhone copy preserves PC and drive copies.
+
+Downloads can target iPhone storage or a selected external folder. Phone transfers use background URLSession. Direct external transfers stream bounded 1 MiB ranges into a partial file on the chosen drive, then verify SHA-256 before saving. They pause when the app backgrounds, preserve partials on the drive, and require the PC, app and drive to be available when resuming. An entire video is never staged in phone storage for this mode. Choose a writable, locally attached drive folder: arbitrary cloud Files providers are not validated for direct transfers.
+
+Discover creates PC download requests plus phone-owned transfer intentions. **Transfer when ready** sends completed episodes to the selected destination when the app next connects. The PC runner continues while the app is closed; discovering newly completed files needs the app to reopen. Transfers and catalog records persist locally. Copies merge only after matching size and verified content hashes; matching filenames alone do not establish identity. Indexed SSD files are not all hashed eagerly, so unrelated catalog copies may remain separate until an import/export/transfer verifies them.
+
+Existing native transfer files are retained and migrated into the catalog. Update the same SideStore app without uninstalling it to preserve its sandbox. The PC hub must also run the updated source so completed download identities reach the phone.
 
 ## Frequent free testing on Windows
 
@@ -18,7 +30,7 @@ npm run test:ui:report
 
 `npm run test:ui:repeat` repeats each case five times when checking an intermittent bug. Normal iteration uses one pass. `npm run hub:demo` prints URLs for an isolated interactive desktop/shared-phone preview and a generated pairing code; Ctrl+C stops it. The shared app is at `/app/`; the legacy browser pickup preview remains at `/phone`.
 
-The separate SwiftUI phone screens have been replaced. `ios/DownloadHub/PhoneWebView.swift` loads the exact `phone/` resources and exposes only named commands. Credentials and physical file URLs remain in native code; external navigation and messages from subframes are refused. The shared interface provides Library, Fetch, Queue, Downloaded and Settings.
+`ios/DownloadHub/PhoneWebView.swift` loads the exact `phone/` resources and exposes only named commands. Credentials, physical URLs and bookmarks remain in native code; external navigation and messages from subframes are refused. The interface provides Library, Discover, Downloads and Settings.
 
 Fetch controls the existing Windows runner through the authenticated hub: source search, paged results, episode selection, collection names, PC job status, pause/resume, cancel/retry and prioritization. PC jobs and phone pickup are separate queues. Browser tests use an injected synthetic runner client and exercise both JavaScript command transports; the backend integration test uses the real runner with a synthetic provider and confirms its completed file can be picked up by a paired phone. Demo mode disables all source controls. No live source download is started by these tests. Swift adds typed responses that exclude runner credentials and folder paths, and safely encodes query parameters; its execution still needs native validation.
 
@@ -32,15 +44,17 @@ Playwright WebKit is a desktop test engine, not Safari on iOS 26 and not an iPho
 
 1. Keep editing source on Windows.
 2. Manually run **iOS simulator tests** from Actions in the public app/test repository. That test workflow has no automatic push/PR trigger. **Build iPhone IPA** runs on native/shared-interface changes on `main`, or on manual dispatch, and returns the unsigned IPA plus its SHA-256 checksum.
-3. A standard `macos-26` runner builds with XcodeGen/Xcode and runs the open-source Maestro CLI. No Maestro Cloud account/API key or Apple signing credentials are needed for the simulator.
+3. A standard `macos-26` runner builds with XcodeGen/Xcode and runs native generated-file integration checks. Simulator-only ad hoc signing enables the real Keychain API without Apple signing credentials. Maestro UI checks are an optional workflow input.
 4. Download the `download-hub-simulator` artifact: build logs, selected device/runtime, JUnit reports, screenshots, and `DownloadHub-simulator.zip`. Artifacts expire after one day.
-5. Inspect failures/screenshots, fix locally, update the repository, and run again. The first Mac run validated Swift compilation; native flow checks remain pending. Windows checks cannot guarantee native execution succeeds.
+5. Inspect failures/screenshots, fix locally, update the repository, and run again. Windows checks cannot guarantee native execution succeeds.
 
 The workflow prefers an available iPhone 15 Pro/iOS 26 simulator and records the actual device/runtime. Hosted runner images may offer different devices or runtimes; a fallback is explicitly recorded in `test-device.json`. Simulator results do not prove behavior on the physical iPhone.
 
 ## What the tests cover
 
-`ios/maestro/transfer.yaml` exercises rejected and successful native pairing, library/episode navigation, selection, queueing, real `URLSession` downloads, SHA-256 verification, and offline persistence across app relaunch. The backend also checks that both full download receipts arrived. Each run creates two generated 2 MiB binary files in a temporary folder on the runner, using the real transfer service. No downloaded media, PC runtime state, Tailscale credentials or browser profiles are involved.
+`ios/test-native.sh` launches the actual simulator app, checks real Keychain pairing and URLSession downloads, hashes saved bytes, exercises catalog migration and organization, bounded direct-folder transfers with pause/resume, copy verification and collision protection, scans/imports a generated H.264 video, presents AVKit for drive and phone playback, then relaunches the app offline to verify persistent files and organization. The external test folder is in the app container: this checks Swift logic, not a physical USB device or Files provider. Reports list completed checks and fail on any error. No downloaded media, PC runtime state, Tailscale credentials or browser profiles are involved.
+
+`ios/maestro/transfer.yaml` provides optional pairing, navigation, download and relaunch UI checks, with native bytes/checksums checked afterward. The hosted iOS 26 runtime has returned an empty WKWebView accessibility tree even when screenshots show the page; Maestro is disabled by default until that issue is resolved. Windows tests exercise the shared UI instead. Never treat a compiled bundle or a screenshot as proof of completed native tests.
 
 `ios/maestro/demo.yaml` exercises navigation and queue selection using clearly labeled demo data. Demo mode does **not** simulate successful downloads. It exists for short Appetize sessions that cannot access the PC's private transfer server.
 
@@ -70,6 +84,8 @@ Install Xcode with an iOS Simulator runtime, XcodeGen, Java 17+, Node 20+, and M
 
 ```bash
 bash transfer-hub/ios/build-simulator.sh
+bash transfer-hub/ios/test-native.sh
+# Optional, subject to hosted WKWebView accessibility limitations:
 bash transfer-hub/ios/test-simulator.sh
 ```
 

@@ -6,6 +6,7 @@ appId: local.downloadhub.personal
     arguments:
       hubTestServer: ${HUB_TEST_SERVER}
       hubTestCode: '00000000'
+- tapOn: Settings
 - assertVisible: Connect to PC
 - tapOn: Connect to PC
 - assertVisible: Pairing code is invalid or expired. Generate another on the PC.
@@ -14,21 +15,20 @@ appId: local.downloadhub.personal
     arguments:
       hubTestServer: ${HUB_TEST_SERVER}
       hubTestCode: ${HUB_TEST_CODE}
+- tapOn: Settings
 - tapOn: Connect to PC
 - extendedWaitUntil:
     visible: Browse Demo Series
     timeout: 30000
 - takeScreenshot: library
 - tapOn: Browse Demo Series
+- tapOn: Browse season S01
 - tapOn: Select all
-- tapOn: Add to queue
+- tapOn: Transfer selected
 - extendedWaitUntil:
-    visible: Pickup queue
+    visible: Start transfers
     timeout: 10000
-- tapOn: Download queued files
-- tapOn:
-    text: Downloaded
-    index: 0
+- tapOn: Start transfers
 - extendedWaitUntil:
     visible: '2 files .* saved'
     timeout: 90000
@@ -36,8 +36,6 @@ appId: local.downloadhub.personal
 - takeScreenshot: downloaded
 - stopApp
 - launchApp
-- tapOn:
-    text: Downloaded
-    index: 0
+- tapOn: Downloads
 - assertVisible: '2 files .* saved'
 - takeScreenshot: persisted-downloads
