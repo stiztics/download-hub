@@ -121,7 +121,7 @@ struct PendingPCRequest: Codable, Identifiable {
             if state.episodes.contains(where: { $0.locations.contains { $0.localName == name && $0.checksum == row.verifiedSHA256 } }) { continue }
             let sourceID = "pc:\(row.server.absoluteString):\(row.entry.fileId)"
             let known = state.episodes.first(where: { $0.locations.contains { $0.id == sourceID } })?.file
-            let file = known ?? LibraryFile(id: row.entry.fileId, series: row.entry.series, title: row.entry.title, season: "Unsorted", episode: nil, filename: row.entry.filename, bytes: row.entry.bytes, quality: nil, completedAt: nil)
+            let file = LibraryFile(id: row.entry.fileId, series: row.entry.series, title: row.entry.title, season: known?.season ?? "Unsorted", episode: known?.episode, filename: row.entry.filename, bytes: row.entry.bytes, quality: known?.quality, completedAt: known?.completedAt, sourceId: known?.sourceId, fingerprint: row.entry.fingerprint)
             if let digest = row.verifiedSHA256 { try setChecksum(locationID: sourceID, checksum: digest, fingerprint: row.entry.fingerprint) }
             try upsert(file, location: EpisodeLocation(id: "phone:\(name)", kind: "phone", label: "On iPhone", localName: name, checksum: row.verifiedSHA256))
         }
