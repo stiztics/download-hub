@@ -1,6 +1,6 @@
 # Native iPhone testing from Windows
 
-The iPhone app uses a **shared web interface in a WKWebView shell**, with native Swift code for background downloads, Keychain and file export. The files in `phone/` are both bundled into the IPA and tested on Windows. No native simulator, cloud build, repository upload or Appetize session has been run yet.
+The iPhone app uses a **shared web interface in a WKWebView shell**, with native Swift code for background downloads, Keychain and file export. The files in `phone/` are both bundled into the IPA and tested on Windows. The app/test source is public at https://github.com/stiztics/download-hub. The Release iPhone IPA and simulator bundle have compiled successfully on GitHub's standard macOS runner. Native simulator checks are being validated; physical iPhone and SideStore behavior still require device testing. No Appetize session has been run.
 
 ## Frequent free testing on Windows
 
@@ -26,12 +26,12 @@ Windows uses `testing/windows-host.js` behind the same command contract. It perf
 
 Native offline files are stored in Documents and exported through the iOS share sheet. Browser tests use an actual browser download to verify exported bytes and confirm that deleting the saved copy preserves the PC original. Passing these tests does not prove native storage, Keychain, background scheduling or share-sheet behavior.
 
-Playwright WebKit is a desktop test engine, not Safari on iOS 26 and not an iPhone simulator. The native IPA still needs a Mac build and occasional real-iPhone checks. Hosted native tests below are optional validation, not the everyday Windows development loop.
+Playwright WebKit is a desktop test engine, not Safari on iOS 26 and not an iPhone simulator. The native IPA is built on macOS and still needs occasional real-iPhone checks. Hosted native tests below are optional validation, not the everyday Windows development loop.
 
 ## Prepared path
 
 1. Keep editing source on Windows.
-2. With approval to upload the app/test source, use a GitHub repository and manually run **iOS simulator tests** from Actions. The workflow has no automatic push/PR trigger.
+2. Manually run **iOS simulator tests** from Actions in the public app/test repository. That test workflow has no automatic push/PR trigger. **Build iPhone IPA** runs on native/shared-interface changes on `main`, or on manual dispatch, and returns the unsigned IPA plus its SHA-256 checksum.
 3. A standard `macos-26` runner builds with XcodeGen/Xcode and runs the open-source Maestro CLI. No Maestro Cloud account/API key or Apple signing credentials are needed for the simulator.
 4. Download the `download-hub-simulator` artifact: build logs, selected device/runtime, JUnit reports, screenshots, and `DownloadHub-simulator.zip`. Artifacts expire after one day.
 5. Inspect failures/screenshots, fix locally, update the repository, and run again. The first Mac run must validate Swift compilation and the prepared scripts; Windows checks cannot guarantee those succeed.
@@ -54,7 +54,7 @@ Appetize's published free plan currently provides 30 minutes per month and three
 
 ## Cost and privacy
 
-GitHub standard hosted runners are free for public repositories. Private GitHub Free accounts have an included Actions allowance (published as 2,000 minutes/month and 500 MB artifact storage), with macOS usage subject to the account's billing rules. Check the account's remaining allowance before running; this workflow does not enable paid runners or change billing. A private repository preserves source privacy but still uploads source to GitHub. Public source publication requires a separate explicit decision. There is no promise of unlimited free native builds.
+GitHub standard hosted runners are free for public repositories. The user authorized publishing the app/test source for this build. The repository excludes downloaded media, PC runtime state, credentials and browser profiles. It includes two local runner adapter files needed by the test backend, but does not contain the full PC downloader. Workflows use standard runners, retain Actions artifacts for one day and do not enable paid runners or change billing. GitHub's runtime, concurrency and storage limits still apply.
 
 For a reviewable app/test-only source export, run on Windows:
 
