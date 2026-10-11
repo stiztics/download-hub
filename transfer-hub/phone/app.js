@@ -119,6 +119,7 @@
   }
   let syncing;
   async function syncPC() {
+    if (state.connection.nativeSelfTest) return;
     if (syncing) return syncing;
     syncing = (async () => {
       try { const result = await Hub.call('refreshCatalog'); state.online = result.online; await refresh(); }

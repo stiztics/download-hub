@@ -80,6 +80,7 @@ import UIKit
         value["canDemo"] = true
         value["testServer"] = UserDefaults.standard.string(forKey: "hubTestServer") ?? ""
         value["testCode"] = UserDefaults.standard.string(forKey: "hubTestCode") ?? ""
+        value["nativeSelfTest"] = UserDefaults.standard.bool(forKey: "hubSelfTest") || UserDefaults.standard.bool(forKey: "hubSelfTestOffline")
         #endif
         return value
     }

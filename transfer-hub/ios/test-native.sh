@@ -7,6 +7,7 @@ fixture_pid=''
 simulator_id=''
 cleanup() {
   if [[ -n "$simulator_id" ]]; then xcrun simctl io "$simulator_id" screenshot build/reports/native-final-screen.png || true; fi
+  if [[ -n "$simulator_id" ]]; then xcrun simctl spawn "$simulator_id" log show --last 10m --style compact --predicate 'process == "DownloadHub" OR eventMessage CONTAINS "local.downloadhub.personal"' > build/reports/native-system.log 2>&1 || true; fi
   if [[ -n "$fixture_pid" ]]; then kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; fi
   rm -f "$fixture_connection"
 }
@@ -35,7 +36,11 @@ echo 'Installing and launching native generated-file integration suite'
 xcrun simctl install "$simulator_id" build/Simulator/Build/Products/SimulatorTest-iphonesimulator/DownloadHub.app
 container=$(xcrun simctl get_app_container "$simulator_id" local.downloadhub.personal data)
 report="$container/Library/Application Support/native-selftest.json"
-xcrun simctl launch "$simulator_id" local.downloadhub.personal -hubSelfTest YES -hubTestServer "$server" -hubTestCode "$code"
+for attempt in {1..3}; do
+  if xcrun simctl launch "$simulator_id" local.downloadhub.personal -hubSelfTest YES -hubTestServer "$server" -hubTestCode "$code"; then break; fi
+  [[ "$attempt" != 3 ]] || exit 1
+  sleep 5
+done
 for attempt in {1..240}; do [[ -s "$report" ]] && break; sleep 1; done
 [[ -s "$report" ]] || { echo 'Native suite did not write a report' >&2; exit 1; }
 cp "$report" build/reports/native-selftest.json
