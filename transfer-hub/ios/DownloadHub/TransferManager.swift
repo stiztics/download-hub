@@ -76,6 +76,18 @@ final class TransferManager: NSObject, ObservableObject, URLSessionDownloadDeleg
         persist(); pump()
     }
     private var preparing = Set<String>()
+    func stage(_ entries: [QueueEntry]) {
+        guard let credentials else { return }
+        for entry in entries {
+            if transfers.contains(where: { $0.entry.fileId == entry.fileId && $0.server == credentials.server && !["downloaded", "failed"].contains($0.status) }) { continue }
+            transfers.append(LocalTransfer(id: entry.id, entry: entry, server: credentials.server, status: "waiting", received: 0))
+        }
+        persist()
+    }
+    func startWaiting() {
+        for index in transfers.indices where transfers[index].status == "waiting" { transfers[index].status = "queued" }
+        persist(); pump()
+    }
     private func pump() {
         guard let credentials else { return }
         let running = transfers.filter { $0.status == "downloading" }.count + preparing.count
@@ -162,7 +174,7 @@ final class TransferManager: NSObject, ObservableObject, URLSessionDownloadDeleg
         do { try data.write(to: stateFile, options: .atomic) } catch { print("Transfer state save failed: \(error.localizedDescription)") }
     }
     private func report(_ transfer: LocalTransfer, status: String) {
-        guard let credentials, transfer.server == credentials.server else { return }
+        guard transfer.entry.clientOwned != true, let credentials, transfer.server == credentials.server else { return }
         let reportedAt = Int64(Date().timeIntervalSince1970 * 1000)
         Task { try? await HubAPI(credentials: credentials).report(transfer.entry, status: status, bytes: transfer.received, reportedAt: reportedAt, error: transfer.error) }
     }

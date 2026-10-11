@@ -35,6 +35,7 @@ import UIKit
     let model: HubModel
     weak var webView: WKWebView?
     var subscription: AnyCancellable?
+    private let media = LibraryMedia()
     private var root: URL? { Bundle.main.resourceURL?.appendingPathComponent("phone", isDirectory: true) }
     init(model: HubModel) {
         self.model = model
@@ -83,7 +84,7 @@ import UIKit
     }
     private func transfers() -> [[String: Any]] {
         TransferManager.shared.transfers.map { row in
-            ["id": row.id, "fileId": row.entry.fileId, "filename": row.entry.filename, "bytes": row.entry.bytes, "status": row.status, "received": row.received, "error": row.error ?? "", "verifiedSHA256": row.verifiedSHA256 ?? "", "canExport": TransferManager.shared.fileURL(row) != nil]
+            ["id": row.id, "fileId": row.entry.fileId, "filename": row.entry.filename, "bytes": row.entry.bytes, "status": row.status, "received": row.received, "error": row.error ?? "", "verifiedSHA256": row.verifiedSHA256 ?? "", "destination": "iPhone", "canExport": TransferManager.shared.fileURL(row) != nil]
         }
     }
     private func transfer(_ params: [String: Any]) throws -> LocalTransfer {
@@ -91,6 +92,8 @@ import UIKit
         return row
     }
     private func handle(_ method: String, params: [String: Any]) async throws -> Any {
+        media.presenter = webView?.window?.rootViewController
+        ExternalDownloads.shared.connect(model.credentials)
         switch method {
         case "connection": return connection()
         case "pair":
@@ -102,19 +105,50 @@ import UIKit
             if model.credentials == nil { throw HubError.message(model.message ?? "Pairing failed.") }
             return connection()
         case "library":
-            if model.demo { return try json(model.files) }
-            let library: LibraryResponse = try await api().send("library")
-            return try json(library.files)
+            if model.demo { return model.files.map { file in ["id": file.id, "series": file.series, "title": file.title, "season": file.season, "episode": file.episode as Any? ?? NSNull(), "filename": file.filename, "bytes": file.bytes, "locations": [["id": file.id, "kind": "pc", "label": "On PC", "available": true]]] as [String: Any] } }
+            return try DeviceLibrary.shared.snapshot()
+        case "refreshCatalog":
+            guard let credentials = model.credentials, !model.demo else { return ["online": false] }
+            do {
+                let library: LibraryResponse = try await api().send("library")
+                try DeviceLibrary.shared.synchronize(library.files, server: credentials.server)
+                // Existing desktop pickup requests remain supported, but the app
+                // creates its own transfer requests without a server queue round trip.
+                let pickup: [QueueEntry] = try await api().send("queue")
+                let fresh = pickup.filter { entry in entry.status != "downloaded" && !TransferManager.shared.transfers.contains { $0.id == entry.id } }
+                TransferManager.shared.stage(fresh)
+                return ["online": true]
+            } catch { return ["online": false, "error": error.localizedDescription] }
+        case "drives": return DeviceLibrary.shared.driveList()
+        case "addFolder": return try await media.addFolder()
+        case "scanDrive":
+            guard let id = params["id"] as? String else { throw HubError.message("Select a folder.") }
+            return ["count": try await media.scan(id)]
+        case "importFiles": return try await media.importFiles()
+        case "play", "importEpisode", "exportEpisode", "deleteEpisode":
+            guard let id = params["id"] as? String else { throw HubError.message("Select an episode.") }
+            if method == "play" { return try await media.play(id) }
+            if method == "importEpisode" { return try await media.importEpisode(id) }
+            if method == "exportEpisode" { return try await media.exportEpisode(id) }
+            try DeviceLibrary.shared.removePhoneCopy(id); return ["deleted": true]
         case "queue":
             if model.demo { return try json(model.queue) }
-            let queue: [QueueEntry] = try await api().send("queue")
-            return try json(queue)
+            return transfers() + ExternalDownloads.shared.snapshot()
         case "addQueue":
             guard let ids = params["fileIds"] as? [String], !ids.isEmpty, ids.count <= 500 else { throw HubError.message("Select files to queue.") }
             if model.demo { model.selection = Set(ids); await model.addSelection(); return try json(model.queue) }
-            let queue: [QueueEntry] = try await api().send("queue", method: "POST", body: JSONSerialization.data(withJSONObject: ["fileIds": ids]))
-            return try json(queue)
-        case "transfers": return transfers()
+            guard let credentials = model.credentials else { throw HubError.message("Pair your PC in Settings before transferring.") }
+            let destination = params["destination"] as? String ?? "phone"
+            for id in ids {
+                let episode = try DeviceLibrary.shared.episode(id)
+                guard let source = episode.locations.first(where: { $0.kind == "pc" && $0.server == credentials.server }), let fileID = source.fileID else { throw HubError.message("This episode has no copy on the connected PC.") }
+                if destination != "phone" { try ExternalDownloads.shared.stage(episode, source: source, driveID: destination); continue }
+                if episode.locations.contains(where: { $0.kind == "phone" && DeviceLibrary.shared.available($0) }) { continue }
+                let entry = QueueEntry(id: String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)), fileId: fileID, filename: episode.file.filename, series: episode.file.series, title: episode.file.title, bytes: episode.file.bytes, status: "queued", bytesCompleted: 0, error: nil, queuedAt: "", updatedAt: "", clientOwned: true)
+                TransferManager.shared.stage([entry])
+            }
+            return transfers() + ExternalDownloads.shared.snapshot()
+        case "transfers": return transfers() + ExternalDownloads.shared.snapshot()
         case "fetcherStatus":
             let status: FetcherStatusResponse = try await api().send("download-jobs")
             return try json(status)
@@ -141,14 +175,17 @@ import UIKit
             return try json(response)
         case "start":
             if model.demo { throw HubError.message("Demo — file transfers unavailable") }
-            let queue: [QueueEntry] = try await api().send("queue")
-            TransferManager.shared.enqueue(queue.filter { $0.status != "downloaded" })
-            return transfers()
+            guard model.credentials != nil else { throw HubError.message("Pair your PC before transferring.") }
+            TransferManager.shared.startWaiting()
+            try ExternalDownloads.shared.start()
+            return transfers() + ExternalDownloads.shared.snapshot()
         case "pause":
+            if let id = params["id"] as? String, ExternalDownloads.shared.jobs.contains(where: { $0.id == id }) { ExternalDownloads.shared.pause(id); return ExternalDownloads.shared.snapshot() }
             let row = try transfer(params)
             guard row.status == "downloading" else { throw HubError.message("This transfer is not downloading.") }
             TransferManager.shared.pause(row.id); return transfers()
         case "resume":
+            if let id = params["id"] as? String, ExternalDownloads.shared.jobs.contains(where: { $0.id == id }) { try ExternalDownloads.shared.resume(id); return ExternalDownloads.shared.snapshot() }
             let row = try transfer(params)
             guard ["paused", "failed"].contains(row.status), model.credentials != nil else { throw HubError.message("Connect the PC before resuming.") }
             TransferManager.shared.resume(row.id); return transfers()
@@ -165,7 +202,7 @@ import UIKit
             sheet.popoverPresentationController?.sourceRect = webView?.bounds ?? .zero
             presenter.present(sheet, animated: true)
             return ["exported": true]
-        case "disconnect": model.disconnect(); return connection()
+        case "disconnect": ExternalDownloads.shared.disconnect(); model.disconnect(); return connection()
         case "demo":
             #if HUB_TESTING && targetEnvironment(simulator)
             model.openDemo(); return connection()

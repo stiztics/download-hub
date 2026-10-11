@@ -26,6 +26,7 @@ struct QueueEntry: Codable, Identifiable {
     let error: String?
     let queuedAt: String
     let updatedAt: String
+    var clientOwned: Bool? = nil
 }
 struct PairResponse: Decodable { let token: String }
 struct ChecksumResponse: Decodable { let sha256: String; let bytes: Int64 }
