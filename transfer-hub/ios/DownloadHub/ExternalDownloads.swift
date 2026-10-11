@@ -155,8 +155,14 @@ struct ExternalDownload: Codable, Identifiable {
 }
 
 // Byte processing runs on the generic executor, keeping the UI responsive.
+private let externalRangeSession: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral()
+    configuration.urlCache = nil
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    return URLSession(configuration: configuration)
+}()
 func receiveExternalRange(_ request: URLRequest, start: Int64, end: Int64, total: Int64) async throws -> Data {
-    let (stream, response) = try await URLSession.shared.bytes(for: request)
+    let (stream, response) = try await externalRangeSession.bytes(for: request)
     guard let http = response as? HTTPURLResponse, http.statusCode == 206,
           http.value(forHTTPHeaderField: "Content-Range") == "bytes \(start)-\(end)/\(total)" else { throw HubError.message("The PC refused the expected range. Refresh and retry.") }
     var data = Data(); data.reserveCapacity(Int(end - start + 1))
