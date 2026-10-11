@@ -1,6 +1,6 @@
 # Native iPhone testing from Windows
 
-The iPhone owns its persistent library. Windows supplies downloads and file transfers. A shared interface runs in WKWebView, with Swift handling the catalog, Keychain, background downloads, Apple's AVKit player, document picking, verified copying and direct external-folder transfers. The files in `phone/` are bundled into the IPA and tested on Windows. Source and unsigned SideStore builds are published at https://github.com/stiztics/download-hub. Physical iPhone, external USB provider and SideStore behavior still require device testing. No Appetize session has been run.
+The iPhone owns its persistent library. Windows supplies downloads and file transfers. A shared interface runs in WKWebView, with Swift handling the catalog, Keychain, background downloads, Apple's AVKit player, document picking, verified copying and direct external-folder transfers. The files in `phone/` are bundled into the IPA and tested on Windows. The unsigned [v0.2.0 IPA](https://github.com/stiztics/download-hub/releases/tag/v0.2.0) is ready for SideStore. All 51 Windows UI tests and 37 local backend tests passed, along with the [native iOS 26.4 integration and offline relaunch run](https://github.com/stiztics/download-hub/actions/runs/38168141710). The hosted device was an iPhone 17 Pro simulator; Windows uses the iPhone 15 Pro viewport. Physical iPhone, external USB provider and SideStore behavior still require device testing. No Appetize session has been run.
 
 ## Using the device library
 
@@ -62,7 +62,7 @@ The `SimulatorTest` configuration enables loopback HTTP and test launch argument
 
 ## Appetize visual testing
 
-Upload `DownloadHub-simulator.zip` manually after approving use of that service. Appetize takes a compressed simulator `.app`, **not** the SideStore `.ipa`. The build contains both ARM and Intel simulator architectures. On its pairing screen, tap **Try demo library** to explore the screens without a server. Real file downloads require a reachable HTTPS fixture/server; uploading the demo bundle alone does not test remote transfers.
+Upload `DownloadHub-simulator.zip` manually after approving use of that service. Appetize takes a compressed simulator `.app`, **not** the SideStore `.ipa`. The build contains both ARM and Intel simulator architectures. Open Settings and tap **Try demo library** to explore the screens without a server. Real file downloads require a reachable HTTPS fixture/server; uploading the demo bundle alone does not test remote transfers.
 
 Appetize's published free plan currently provides 30 minutes per month and three minutes per session. That is enough for occasional browser Computer Use checks, not an unlimited development session. Browser control also depends on the service's UI being accessible to the available tools.
 
