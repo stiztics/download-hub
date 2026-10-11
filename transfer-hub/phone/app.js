@@ -2,7 +2,7 @@
   const $ = selector => document.querySelector(selector);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const bytes = value => value >= 1e9 ? `${(value / 1e9).toFixed(1)} GB` : `${(value / 1e6).toFixed(1)} MB`;
-  const state = { connection: {}, files: [], queue: [], transfers: [], selection: new Set(), series: null, search: '', tab: 'library', online: false };
+  const state = { connection: {}, files: [], queue: [], transfers: [], drives: [], selection: new Set(), series: null, season: null, filter: 'all', search: '', tab: 'library', online: false, episode: null };
   const fetcher = { status: null, error: '', results: null, title: null, selection: new Set(), query: '', page: 1, notice: '' };
   let connectionEpoch = 0, fetcherRefresh, fetcherBusy = 0;
   let toastTimer, pendingConfirmation, refreshing = false;
@@ -11,12 +11,15 @@
   function dismissToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
   function toast(message, error = false) { $('#toast').textContent = message; $('#toast').classList.toggle('error', error); $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 6000); }
   async function action(button, task) { const pc = Boolean(button.closest('#fetcher-view')); if (pc) fetcherBusy++; button.disabled = true; if (pc) renderFetcher(); try { await task(); } catch (error) { toast(error.message, true); } finally { if (pc) fetcherBusy--; button.disabled = false; render(); } }
-  function visibleFiles() { return state.files.filter(file => (!state.series || file.series === state.series) && `${file.series} ${file.title} ${file.filename}`.toLowerCase().includes(state.search)); }
+  function locations(file) { return file.locations || [{ kind: 'pc', label: 'On PC', available: true }]; }
+  function visibleFiles() { return state.files.filter(file => (!state.series || file.series === state.series) && (!state.season || file.season === state.season) && (state.filter === 'all' || locations(file).some(source => source.kind === state.filter)) && `${file.series} ${file.title} ${file.season} ${file.filename}`.toLowerCase().includes(state.search)); }
+  function badges(file) { return locations(file).map(source => `<span class="badge ${source.available ? '' : 'unavailable'}">${escape(source.label)}${source.available ? '' : source.kind === 'drive' ? ' · disconnected' : ' · unavailable'}</span>`).join(''); }
   function render() {
     const paired = state.connection.paired;
     $('#connection').textContent = state.connection.demo ? 'Demo data' : state.online ? 'PC online' : paired ? 'PC unavailable' : 'Not connected';
-    $('#pair-view').hidden = paired || !['library', 'queue', 'fetcher'].includes(state.tab);
-    for (const tab of ['library', 'queue', 'downloaded', 'settings', 'fetcher']) $(`#${tab}-view`).hidden = tab !== state.tab || (!paired && ['library', 'queue', 'fetcher'].includes(tab));
+    $('#pair-view').hidden = paired || state.tab !== 'settings';
+    for (const tab of ['library', 'queue', 'settings', 'fetcher']) $(`#${tab}-view`).hidden = tab !== state.tab;
+    $('#downloaded-view').hidden = state.tab !== 'queue';
     document.querySelectorAll('[data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === state.tab));
     $('#demo').hidden = !state.connection.canDemo;
     $('#platform-note').hidden = state.connection.platform !== 'windows-test' && !state.connection.demo;
@@ -24,22 +27,33 @@
     $('#pc-address').textContent = state.connection.server || 'No PC paired';
     $('#disconnect').disabled = !paired;
     $('#engine-note').textContent = state.connection.platform === 'windows-test' ? 'Windows tests use browser storage and HTTP ranges. iPhone uses native background transfers and app storage.' : 'iOS controls background scheduling. Force-quitting may interrupt transfers. Resume can restart if iOS cannot reuse saved resume data.';
-    $('#library-summary').textContent = `${state.files.length} completed files · ${bytes(state.files.reduce((sum, file) => sum + file.bytes, 0))}`;
+    $('#library-summary').textContent = `${state.files.length} episodes · ${bytes(state.files.reduce((sum, file) => sum + file.bytes, 0))}`;
+    $('#library-offline').hidden = state.online || !state.files.some(file => locations(file).some(source => source.kind === 'pc'));
     const files = visibleFiles(), groups = [...new Set(files.map(file => file.series))].sort();
     $('#series-list').hidden = Boolean(state.series);
-    setHTML('#series-list', groups.map(series => `<button class="series" data-series="${escape(series)}" aria-label="Browse ${escape(series)}"><span class="series-icon">▦</span><span><strong>${escape(series)}</strong><small>${files.filter(file => file.series === series).length} files</small></span></button>`).join(''));
+    setHTML('#series-list', groups.map(series => `<button class="series" data-series="${escape(series)}" aria-label="Browse ${escape(series)}"><span class="series-icon">▦</span><span><strong>${escape(series)}</strong><small>${files.filter(file => file.series === series).length} episodes</small><span class="badges">${[...new Set(files.filter(file => file.series === series).flatMap(file => locations(file).map(source => source.kind)))].map(kind => `<span class="badge">${kind === 'phone' ? 'On iPhone' : kind === 'drive' ? 'On SSD' : 'On PC'}</span>`).join('')}</span></span></button>`).join(''));
     $('#episodes').hidden = !state.series;
-    $('#series-name').textContent = state.series || '';
-    setHTML('#episode-list', files.sort((a, b) => Number(a.episode) - Number(b.episode)).map(file => `<div class="episode"><input type="checkbox" id="pick-${escape(file.id)}" data-file="${escape(file.id)}" ${state.selection.has(file.id) ? 'checked' : ''}><label for="pick-${escape(file.id)}">${file.season === 'Movie' ? 'Movie' : `Episode ${escape(file.episode ?? '—')}`}<small>${escape(file.title)} · ${escape(file.season)}</small></label><span>${bytes(file.bytes)}</span></div>`).join(''));
+    $('#series-name').textContent = state.season ? `${state.series} / ${state.season}` : state.series || '';
+    $('#back').textContent = state.season ? '← All seasons' : '← All series';
+    $('#season-list').hidden = Boolean(state.season);
+    $('#episode-list').hidden = !state.season;
+    const seasons = [...new Set(files.map(file => file.season || 'Unsorted'))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    setHTML('#season-list', seasons.map(season => `<button class="series" data-season="${escape(season)}" aria-label="Browse season ${escape(season)}"><span class="series-icon">▤</span><span><strong>${escape(season)}</strong><small>${files.filter(file => (file.season || 'Unsorted') === season).length} episodes</small></span></button>`).join(''));
+    setHTML('#episode-list', files.sort((a, b) => (a.episode ?? Infinity) - (b.episode ?? Infinity) || a.filename.localeCompare(b.filename, undefined, { numeric: true })).map(file => `<div class="episode"><input type="checkbox" id="pick-${escape(file.id)}" aria-label="Select ${escape(file.filename)}" data-file="${escape(file.id)}" ${state.selection.has(file.id) ? 'checked' : ''}><button class="episode-name" data-play="${escape(file.id)}" aria-label="Play ${escape(file.filename)}">${file.episode == null ? escape(file.filename) : `Episode ${escape(file.episode)}`}<small>${escape(file.title)} · ${bytes(file.bytes)}</small><span class="badges">${badges(file)}</span></button><button class="text" data-details="${escape(file.id)}" aria-label="Details for ${escape(file.filename)}">•••</button></div>`).join(''));
     $('#library-empty').hidden = files.length !== 0;
-    $('#selection').hidden = !paired || state.tab !== 'library' || !state.selection.size;
+    $('#selection').hidden = state.tab !== 'library' || !state.selection.size;
     $('#selected-count').textContent = `${state.selection.size} selected`;
     $('#demo-warning').hidden = !state.connection.demo;
     $('#start').disabled = state.connection.demo || !state.queue.some(entry => !['downloaded'].includes(state.transfers.find(row => row.id === entry.id)?.status || entry.status));
+    const destination = $('#destination').value;
+    setHTML('#destination', '<option value="phone">iPhone storage</option>' + state.drives.filter(drive => drive.available).map(drive => `<option value="${escape(drive.id)}">SSD · ${escape(drive.name)}</option>`).join(''));
+    if ([...$('#destination').options].some(option => option.value === destination)) $('#destination').value = destination;
+    $('#destination-note').textContent = $('#destination').value === 'phone' ? 'iPhone downloads support background transfers.' : 'Direct SSD transfers · keep this app open and the drive connected. Partial files stay on the drive.';
+    setHTML('#drive-list', state.drives.map(drive => `<div class="drive"><strong>${escape(drive.name)}</strong><span class="badge">${drive.available ? 'Connected' : 'Disconnected'}</span><button data-scan="${escape(drive.id)}" ${drive.available ? '' : 'disabled'}>Rescan</button></div>`).join('') || '<p class="muted small">Add a folder from a connected SSD or USB drive in Library.</p>');
     $('#queue-empty').hidden = state.queue.length !== 0;
     setHTML('#queue-list', state.queue.map(entry => {
       const local = state.transfers.find(row => row.id === entry.id), status = local?.status || entry.status;
-      return `<div class="card" data-transfer="${escape(entry.id)}"><strong>${escape(entry.filename)}</strong><div class="meta"><span>${bytes(entry.bytes)}</span><span class="status">${escape(status)}</span></div>${local && ['downloading', 'paused', 'verifying'].includes(status) ? '<progress max="1" value="0" aria-label="Download progress"></progress>' : ''}${local?.error ? `<p class="muted small">${escape(local.error)}</p>` : ''}<div class="actions">${status === 'downloading' ? `<button data-command="pause" data-id="${escape(entry.id)}">Pause</button>` : ['paused', 'failed'].includes(status) ? `<button data-command="resume" data-id="${escape(entry.id)}">Resume</button>` : ''}</div></div>`;
+      return `<div class="card" data-transfer="${escape(entry.id)}"><strong>${escape(entry.filename)}</strong><div class="meta"><span>${bytes(entry.bytes)} · ${escape(entry.destination || 'iPhone')}</span><span class="status">${escape(status)}</span></div>${local && ['downloading', 'paused', 'verifying'].includes(status) ? '<progress max="1" value="0" aria-label="Download progress"></progress>' : ''}${local?.error ? `<p class="muted small">${escape(local.error)}</p>` : ''}<div class="actions">${status === 'downloading' ? `<button data-command="pause" data-id="${escape(entry.id)}">Pause</button>` : ['paused', 'failed'].includes(status) ? `<button data-command="resume" data-id="${escape(entry.id)}">Resume</button>` : ''}</div></div>`;
     }).join(''));
     for (const card of $('#queue-list').querySelectorAll('[data-transfer]')) {
       const entry = state.queue.find(entry => entry.id === card.dataset.transfer);
@@ -86,34 +100,62 @@
     fetcher.results = results; fetcher.page = page; fetcher.title = null; fetcher.selection.clear(); fetcher.notice = ''; renderFetcher();
   }
   function switchTab(tab) { state.tab = tab; render(); window.scrollTo(0, 0); if (tab === 'fetcher') void refreshFetcher(); }
-  async function refreshTransfers() { state.transfers = await Hub.call('transfers'); render(); }
+  let savedRevision = '';
+  async function refreshTransfers() { state.transfers = await Hub.call('transfers'); state.queue = await Hub.call('queue'); const revision = state.transfers.filter(row => row.status === 'downloaded').map(row => row.id).join('|'); if (revision !== savedRevision) { savedRevision = revision; state.files = await Hub.call('library'); } render(); }
   async function refresh() {
     if (refreshing) return;
     refreshing = true;
     try {
       state.connection = await Hub.call('connection');
+      state.files = await Hub.call('library');
       await refreshTransfers();
-      if (state.connection.paired) {
-        try {
-          const [library, queue] = await Promise.all([Hub.call('library'), Hub.call('queue')]);
-          state.files = library; state.queue = queue; state.online = !state.connection.demo;
-          const ids = new Set(library.map(file => file.id)); state.selection = new Set([...state.selection].filter(id => ids.has(id)));
-        } catch (error) { state.online = false; toast(error.message, true); }
-      } else { state.files = []; state.queue = []; state.online = false; }
+      state.drives = await Hub.call('drives');
+      const ids = new Set(state.files.map(file => file.id)); state.selection = new Set([...state.selection].filter(id => ids.has(id)));
       render();
     } finally { refreshing = false; }
   }
+  let syncing;
+  async function syncPC() {
+    if (syncing) return syncing;
+    syncing = (async () => {
+      try { const result = await Hub.call('refreshCatalog'); state.online = result.online; await refresh(); }
+      catch { state.online = false; render(); }
+    })();
+    try { await syncing; } finally { syncing = null; }
+  }
   function confirm(title, text, task) { pendingConfirmation = task; $('#confirm-title').textContent = title; $('#confirm-text').textContent = text; $('#confirm-dialog').showModal(); }
-  $('#pair-form').addEventListener('submit', event => { event.preventDefault(); action($('#connect'), async () => { await Hub.call('pair', { server: $('#server').value.trim(), code: $('#code').value }); resetFetcher(); dismissToast(); await refresh(); if (state.tab === 'fetcher') await refreshFetcher(); }); });
-  $('#refresh').addEventListener('click', event => action(event.currentTarget, refresh));
+  $('#pair-form').addEventListener('submit', event => { event.preventDefault(); action($('#connect'), async () => { await Hub.call('pair', { server: $('#server').value.trim(), code: $('#code').value }); resetFetcher(); dismissToast(); await syncPC(); switchTab('library'); }); });
+  $('#refresh').addEventListener('click', event => action(event.currentTarget, syncPC));
   $('#search').addEventListener('input', event => { state.search = event.target.value.trim().toLowerCase(); render(); });
-  $('#back').addEventListener('click', () => { state.series = null; render(); });
+  $('#back').addEventListener('click', () => { if (state.season) state.season = null; else state.series = null; render(); });
   $('#select-all').addEventListener('click', () => { visibleFiles().forEach(file => state.selection.add(file.id)); render(); });
   $('#clear').addEventListener('click', () => { state.selection.clear(); render(); });
-  $('#add').addEventListener('click', event => action(event.currentTarget, async () => { state.queue = await Hub.call('addQueue', { fileIds: [...state.selection] }); state.selection.clear(); switchTab('queue'); }));
+  $('#add').addEventListener('click', event => action(event.currentTarget, async () => { state.queue = await Hub.call('addQueue', { fileIds: [...state.selection], destination: $('#destination').value }); state.selection.clear(); switchTab('queue'); }));
   $('#start').addEventListener('click', event => action(event.currentTarget, async () => { await Hub.call('start'); await refreshTransfers(); }));
   $('#demo').addEventListener('click', event => action(event.currentTarget, async () => { await Hub.call('demo'); resetFetcher(); await refresh(); }));
-  $('#disconnect').addEventListener('click', () => confirm('Disconnect PC?', 'Phone transfers pause. Saved files stay on this device. PC downloads keep running.', async () => { await Hub.call('disconnect'); resetFetcher(); state.selection.clear(); state.series = null; state.search = ''; $('#search').value = ''; await refresh(); switchTab('library'); }));
+  $('#disconnect').addEventListener('click', () => confirm('Disconnect PC?', 'Transfers pause. Your library and saved files stay available. PC downloads keep running.', async () => { await Hub.call('disconnect'); state.online = false; resetFetcher(); await refresh(); switchTab('library'); }));
+  $('#library-filter').addEventListener('change', event => { state.filter = event.target.value; state.series = state.season = null; render(); });
+  $('#destination').addEventListener('change', render);
+  for (const [id, method] of [['add-folder', 'addFolder'], ['import-files', 'importFiles']]) $( '#' + id).addEventListener('click', event => action(event.currentTarget, async () => { const result = await Hub.call(method); await refresh(); toast(`${result.count} episodes ${method === 'addFolder' ? 'indexed' : 'imported'}`); }));
+  function showDetails(id) {
+    const file = state.files.find(file => file.id === id); if (!file) return;
+    state.episode = id;
+    $('#episode-title').textContent = file.episode == null ? file.filename : `Episode ${file.episode}`;
+    $('#episode-info').textContent = `${file.filename} · ${bytes(file.bytes)} · ${file.series} / ${file.season}`;
+    $('#episode-locations').innerHTML = badges(file);
+    const local = locations(file).some(source => source.kind !== 'pc' && source.available);
+    $('#episode-play').disabled = $('#episode-export').disabled = !local;
+    $('#episode-import').hidden = !locations(file).some(source => source.kind === 'drive' && source.available) || locations(file).some(source => source.kind === 'phone' && source.available);
+    $('#episode-download').hidden = !locations(file).some(source => source.kind === 'pc');
+    $('#episode-delete').hidden = !locations(file).some(source => source.kind === 'phone' && source.available);
+    $('#organize-series').value = file.series; $('#organize-season').value = file.season; $('#organize-episode').value = file.episode ?? '';
+    $('#episode-dialog').showModal();
+  }
+  $('#episode-close').addEventListener('click', () => $('#episode-dialog').close());
+  for (const [id, method] of [['episode-play', 'play'], ['episode-import', 'importEpisode'], ['episode-export', 'exportEpisode']]) $('#' + id).addEventListener('click', event => action(event.currentTarget, async () => { const episodeID = state.episode; $('#episode-dialog').close(); await Hub.call(method, { id: episodeID }); await refresh(); }));
+  $('#episode-download').addEventListener('click', event => action(event.currentTarget, async () => { const id = state.episode; $('#episode-dialog').close(); await Hub.call('addQueue', { fileIds: [id], destination: $('#destination').value }); await refresh(); switchTab('queue'); }));
+  $('#episode-delete').addEventListener('click', () => { const id = state.episode; $('#episode-dialog').close(); confirm('Delete iPhone copy?', 'The PC and SSD copies will stay untouched.', async () => { await Hub.call('deleteEpisode', { id }); await refresh(); }); });
+  $('#organize-form').addEventListener('submit', event => { event.preventDefault(); action(event.currentTarget.querySelector('button'), async () => { await Hub.call('organize', { id: state.episode, series: $('#organize-series').value.trim(), season: $('#organize-season').value.trim(), episode: $('#organize-episode').value === '' ? null : Number($('#organize-episode').value) }); $('#episode-dialog').close(); state.series = state.season = null; await refresh(); }); });
   $('#fetcher-refresh').addEventListener('click', event => action(event.currentTarget, refreshFetcher));
   $('#fetcher-search-form').addEventListener('submit', event => { event.preventDefault(); fetcher.query = $('#fetcher-query').value.trim(); action($('#fetcher-search'), () => searchFetcher()); });
   $('#fetcher-select-all').addEventListener('click', () => { fetcher.title?.episodes.forEach(episode => fetcher.selection.add(episode.id)); renderFetcher(); });
@@ -129,7 +171,11 @@
   document.addEventListener('change', event => { if (event.target.dataset.file) { event.target.checked ? state.selection.add(event.target.dataset.file) : state.selection.delete(event.target.dataset.file); render(); } if (event.target.dataset.fetcherEpisode) { event.target.checked ? fetcher.selection.add(event.target.dataset.fetcherEpisode) : fetcher.selection.delete(event.target.dataset.fetcherEpisode); renderFetcher(); } });
   document.addEventListener('click', event => {
     const tab = event.target.closest('[data-tab]'); if (tab) switchTab(tab.dataset.tab);
-    const series = event.target.closest('[data-series]'); if (series) { state.series = series.dataset.series; render(); }
+    const series = event.target.closest('[data-series]'); if (series) { state.series = series.dataset.series; state.season = null; render(); }
+    const season = event.target.closest('[data-season]'); if (season) { state.season = season.dataset.season; render(); }
+    const details = event.target.closest('[data-details]'); if (details) showDetails(details.dataset.details);
+    const playing = event.target.closest('[data-play]'); if (playing) { const file = state.files.find(file => file.id === playing.dataset.play); if (file && locations(file).some(source => source.kind !== 'pc' && source.available)) action(playing, () => Hub.call('play', { id: file.id })); else showDetails(playing.dataset.play); }
+    const scan = event.target.closest('[data-scan]'); if (scan) action(scan, async () => { const result = await Hub.call('scanDrive', { id: scan.dataset.scan }); await refresh(); toast(`${result.count} episodes indexed`); });
     const command = event.target.closest('[data-command]'); if (command) action(command, async () => { await Hub.call(command.dataset.command, { id: command.dataset.id }); await refreshTransfers(); });
     const deleting = event.target.closest('[data-delete]'); if (deleting) confirm('Delete downloaded file?', 'This removes the saved copy from this device. The original stays on your PC.', async () => { await Hub.call('delete', { id: deleting.dataset.delete }); await refreshTransfers(); });
     const title = event.target.closest('[data-fetcher-title]'); if (title) action(title, async () => { const epoch = connectionEpoch; const value = await Hub.call('fetcherTitle', { id: title.dataset.fetcherTitle }); if (epoch !== connectionEpoch) return; fetcher.title = value; fetcher.selection = new Set(value.episodes.map(episode => episode.id)); $('#fetcher-series').value = value.title; renderFetcher(); $('#fetcher-title').scrollIntoView({ block: 'start' }); });
@@ -144,11 +190,11 @@
   window.addEventListener('hub-transfer-update', () => refreshTransfers().catch(() => {}));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh().catch(error => toast(error.message, true)); if (state.tab === 'fetcher') void refreshFetcher(); } });
   async function boot() {
-    try { await refresh(); $('#server').value = state.connection.testServer || state.connection.server || ''; $('#code').value = state.connection.testCode || ''; }
+    try { await refresh(); $('#server').value = state.connection.testServer || state.connection.server || ''; $('#code').value = state.connection.testCode || ''; void syncPC(); }
     catch (error) { toast(error.message, true); render(); }
   }
   boot();
-  setInterval(() => { if (!document.hidden) refreshTransfers().catch(() => {}); }, 700);
-  setInterval(() => { if (!document.hidden && state.connection.paired) refresh().catch(() => {}); }, 15000);
+  setInterval(() => { if (!document.hidden) refreshTransfers().catch(() => {}); }, 1000);
+  setInterval(() => { if (!document.hidden && state.connection.paired) void syncPC(); }, 30000);
   setInterval(() => { if (!document.hidden && state.tab === 'fetcher') void refreshFetcher(); }, 4000);
 })();

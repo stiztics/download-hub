@@ -4,6 +4,18 @@
 (() => {
   let credentials = JSON.parse(sessionStorage.getItem('hub-test-connection') || 'null');
   let demo = false, demoQueue = [];
+  let catalog = JSON.parse(localStorage.getItem('hub-test-catalog') || '[]');
+  const driveState = JSON.parse(localStorage.getItem('hub-test-drives') || '[]');
+  const rememberCatalog = () => localStorage.setItem('hub-test-catalog', JSON.stringify(catalog));
+  function snapshot() {
+    for (const row of rows.values()) if (row.status === 'downloaded' && row.verifiedSHA256) {
+      let file = catalog.find(file => file.id === row.fileId);
+      if (!file) { file = { ...(row.entry || {}), id: row.fileId, season: 'Unsorted', episode: null, filename: row.filename, bytes: row.bytes, locations: [] }; catalog.push(file); }
+      const id = 'phone:' + row.id;
+      if (!file.locations.some(source => source.id === id)) file.locations.push({ id, kind: 'phone', label: 'On iPhone', available: true, transferId: row.id });
+    }
+    rememberCatalog(); return structuredClone(catalog);
+  }
   const rows = new Map(), jobs = new Map();
   let writes = Promise.resolve();
   const dbPromise = new Promise((resolve, reject) => {
@@ -52,6 +64,7 @@
     return response;
   }
   async function report(row) {
+    if (row.entry?.clientOwned) return;
     const body = { status: row.status === 'verifying' ? 'downloading' : row.status, bytesCompleted: row.received, reportedAt: Date.now(), ...(row.error ? { error: row.error } : {}) };
     await api('queue/' + row.id, 'PATCH', body);
   }
@@ -129,8 +142,63 @@
           sessionStorage.setItem('hub-test-connection', JSON.stringify(credentials));
           return connection();
         }
-        case 'library': return demo ? demoFiles : (await (await api('library')).json()).files;
-        case 'queue': return demo ? demoQueue : (await api('queue')).json();
+        case 'library': return demo ? demoFiles : snapshot();
+        case 'refreshCatalog': {
+          if (!credentials || demo) return { online: false };
+          try {
+            const files = (await (await api('library')).json()).files;
+            for (const entry of catalog) for (const source of entry.locations) if (source.kind === 'pc') source.available = files.some(file => file.id === entry.id);
+            for (const file of files) {
+              const previous = catalog.find(entry => entry.id === file.id);
+              const source = { id: 'pc:' + file.id, kind: 'pc', label: 'On PC', available: true };
+              if (previous) { if (!previous.organized) Object.assign(previous, file); previous.locations = [...previous.locations.filter(location => location.kind !== 'pc'), source]; }
+              else catalog.push({ ...file, locations: [source] });
+            }
+            rememberCatalog(); return { online: true };
+          } catch (error) { return { online: false, error: error.message }; }
+        }
+        case 'drives': return structuredClone(driveState);
+        case 'addFolder': {
+          const fixture = window.__externalFolderFixture;
+          if (!fixture) throw new Error('Windows preview needs a generated external-folder fixture; use your iPhone for the real Files picker.');
+          const drive = { id: fixture.id, name: fixture.name, available: true };
+          if (!driveState.some(item => item.id === drive.id)) driveState.push(drive);
+          for (const file of fixture.files) if (!catalog.some(item => item.id === file.id)) catalog.push({ ...file, locations: [{ id: 'drive:' + file.id, kind: 'drive', label: 'On SSD · ' + drive.name, available: true, driveID: drive.id }] });
+          rememberCatalog(); localStorage.setItem('hub-test-drives', JSON.stringify(driveState));
+          return { count: fixture.files.length };
+        }
+        case 'scanDrive': {
+          const drive = driveState.find(drive => drive.id === params.id); if (!drive) throw new Error('Unknown folder.');
+          drive.available = window.__externalFolderFixture?.available !== false;
+          for (const file of catalog) for (const source of file.locations) if (source.driveID === drive.id) source.available = drive.available;
+          rememberCatalog(); localStorage.setItem('hub-test-drives', JSON.stringify(driveState));
+          return { count: catalog.filter(file => file.locations.some(source => source.driveID === drive.id)).length };
+        }
+        case 'organize': {
+          const file = catalog.find(file => file.id === params.id);
+          if (!file || !params.series || !params.season) throw new Error('Enter a series and season.');
+          Object.assign(file, { series: params.series, title: params.series, season: params.season, episode: params.episode, organized: true }); rememberCatalog(); return { saved: true };
+        }
+        case 'play': {
+          const file = snapshot().find(file => file.id === params.id);
+          if (!file?.locations.some(source => source.kind !== 'pc' && source.available)) throw new Error('Download this episode or reconnect its drive to play.');
+          if (!/\.(mp4|m4v|mov)$/i.test(file.filename)) throw new Error("Apple's player cannot play this video format. You can still export the file.");
+          throw new Error('Native playback requires the iPhone. Windows tests validate the request and file availability.');
+        }
+        case 'importFiles': throw new Error('Use the iPhone Files picker to import actual files.');
+        case 'importEpisode': throw new Error('Use the iPhone to copy actual SSD files.');
+        case 'exportEpisode': {
+          const file = snapshot().find(file => file.id === params.id);
+          const source = file?.locations.find(source => source.kind === 'phone');
+          if (!source) throw new Error('Use the iPhone to export SSD files.');
+          return this.call('export', { id: source.transferId });
+        }
+        case 'deleteEpisode': {
+          const file = catalog.find(file => file.id === params.id); if (!file) throw new Error('Episode not found.');
+          for (const source of file.locations.filter(source => source.kind === 'phone')) await this.call('delete', { id: source.transferId });
+          file.locations = file.locations.filter(source => source.kind !== 'phone'); rememberCatalog(); return { deleted: true };
+        }
+        case 'queue': return demo ? demoQueue : transfers();
         case 'fetcherStatus':
         case 'fetcherSearch':
         case 'fetcherTitle':
@@ -148,7 +216,17 @@
             for (const id of params.fileIds) { const file = demoFiles.find(file => file.id === id); if (!file) throw new Error('Unknown demo file.'); if (!demoQueue.some(row => row.fileId === id)) demoQueue.push({ ...file, fileId: id, status: 'queued', bytesCompleted: 0 }); }
             return demoQueue;
           }
-          return (await api('queue', 'POST', { fileIds: params.fileIds })).json();
+          if (params.destination && params.destination !== 'phone') throw new Error('Direct SSD writes require the native iPhone engine.');
+          for (const id of params.fileIds) {
+            const file = catalog.find(file => file.id === id);
+            if (!file?.locations.some(source => source.kind === 'pc')) throw new Error('This episode has no PC copy.');
+            if (file.locations.some(source => source.kind === 'phone' && source.available)) continue;
+            if ([...rows.values()].some(row => row.fileId === id && !['downloaded', 'failed'].includes(row.status))) continue;
+            const entry = { ...file, id: crypto.randomUUID().replaceAll('-', '').slice(0, 24), fileId: id, clientOwned: true };
+            const row = { id: entry.id, fileId: id, filename: file.filename, bytes: file.bytes, status: 'waiting', received: 0, chunks: [], error: '', verifiedSHA256: '', entry };
+            rows.set(row.id, row); await save(row);
+          }
+          return transfers();
         }
         case 'transfers': return transfers();
         case 'start': {
@@ -160,6 +238,7 @@
             if (existing && ['paused', 'failed'].includes(existing.status)) existing.status = 'queued';
             else if (!existing) rows.set(entry.id, { id: entry.id, fileId: entry.fileId, filename: entry.filename, bytes: entry.bytes, status: 'queued', received: 0, chunks: [], error: '', verifiedSHA256: '', entry });
           }
+          for (const row of rows.values()) if (row.status === 'waiting') { row.status = 'queued'; await save(row); }
           pump(); return transfers();
         }
         case 'pause': await pause(params.id); return transfers();
@@ -181,7 +260,9 @@
         case 'delete': {
           const row = getRow(params.id);
           if (row.status !== 'downloaded') throw new Error('Only a finished file can be deleted here.');
-          await writes; await transaction('readwrite', store => store.delete(row.id)); rows.delete(row.id); notify(); return transfers();
+          await writes; await transaction('readwrite', store => store.delete(row.id)); rows.delete(row.id);
+          for (const file of catalog) file.locations = file.locations.filter(source => source.transferId !== row.id);
+          rememberCatalog(); notify(); return transfers();
         }
         case 'disconnect': {
           for (const row of rows.values()) if (row.status === 'queued') { row.status = 'paused'; await save(row); }

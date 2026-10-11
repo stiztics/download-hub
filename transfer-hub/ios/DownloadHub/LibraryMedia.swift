@@ -38,7 +38,7 @@ import AVFoundation
     }
     func addFolder() async throws -> [String: Any] {
         guard let url = try await pick(types: [.folder]).first else { throw HubError.message("No folder selected.") }
-        guard url.startAccessingSecurityScopedResource() else { throw HubError.message("Could not access that folder.") }
+        guard beginFolderAccess(url) else { throw HubError.message("Could not access that folder.") }
         defer { url.stopAccessingSecurityScopedResource() }
         let drive = try DeviceLibrary.shared.addDrive(url)
         let count = try await scan(drive.id)
@@ -46,7 +46,7 @@ import AVFoundation
     }
     func scan(_ driveID: String) async throws -> Int {
         let root = try DeviceLibrary.shared.resolveDrive(driveID)
-        guard root.startAccessingSecurityScopedResource() else { throw HubError.message("Reconnect the drive and add its folder again if needed.") }
+        guard beginFolderAccess(root) else { throw HubError.message("Reconnect the drive and add its folder again if needed.") }
         defer { root.stopAccessingSecurityScopedResource() }
         let name = DeviceLibrary.shared.state.drives.first(where: { $0.id == driveID })!.name
         let files = try await Task.detached(priority: .utility) { () throws -> [(String, LibraryFile)] in
@@ -104,6 +104,7 @@ import AVFoundation
         } catch { root?.stopAccessingSecurityScopedResource(); stopPlayback(); throw error }
     }
     @objc private func closePlayback() { playerController?.dismiss(animated: true); stopPlayback() }
+    func finishPlayback() { closePlayback() }
     private func stopPlayback() {
         if let player = playback {
             if let id = playbackID { try? DeviceLibrary.shared.setPosition(id, seconds: player.currentTime().seconds) }
@@ -151,7 +152,7 @@ import AVFoundation
     func exportEpisode(_ episodeID: String) async throws -> [String: Any] {
         let item = try DeviceLibrary.shared.episode(episodeID)
         guard let source = item.locations.first(where: { $0.kind != "pc" && DeviceLibrary.shared.available($0) }) else { throw HubError.message("No accessible saved copy.") }
-        guard let folder = try await pick(types: [.folder]).first, folder.startAccessingSecurityScopedResource() else { throw HubError.message("Choose a writable folder.") }
+        guard let folder = try await pick(types: [.folder]).first, beginFolderAccess(folder) else { throw HubError.message("Choose a writable folder.") }
         defer { folder.stopAccessingSecurityScopedResource() }
         let drive = try DeviceLibrary.shared.addDrive(folder)
         let relative = safeFilename(item.file.series) + "/" + safeFilename(item.file.season) + "/" + safeFilename(item.file.filename)
@@ -183,6 +184,7 @@ func inferredEpisode(_ url: URL, relative: String, folderName: String, bytes: In
     return LibraryFile(id: UUID().uuidString, series: series, title: series, season: season, episode: episode, filename: filename, bytes: bytes, quality: nil, completedAt: nil)
 }
 func coordinatedCopy(from source: URL, to target: URL) throws {
+    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
     var coordinationError: NSError?, operationError: Error?
     NSFileCoordinator().coordinate(readingItemAt: source, options: [], writingItemAt: target, options: .forReplacing, error: &coordinationError) { source, target in
         do {

@@ -72,7 +72,8 @@ export async function createHub(options = {}) {
         if (!info.isFile() || info.size !== item.bytes || /\.(part|copying)$/i.test(item.file)) { unavailable++; continue; }
         if (seen.has(physical)) continue;
         seen.add(physical);
-        files.push({ id: sha(String(item.id) + '\0' + path.relative(libraryRoot, resolved)), series: item.series || 'Other', title: item.title || item.series || 'Untitled', season: item.code || 'Season', episode: item.episode, filename: item.file, bytes: info.size, quality: item.quality || null, completedAt: item.completedAt || null, physical, mtime: info.mtimeMs });
+        const season = item.folder.split(/[\\/]/).some(part => part.toLowerCase() === 'movies') ? 'Movie' : item.code || 'Season';
+        files.push({ id: sha(String(item.id) + '\0' + path.relative(libraryRoot, resolved)), series: item.series || 'Other', title: item.title || item.series || 'Untitled', season, episode: item.episode, filename: item.file, bytes: info.size, quality: item.quality || null, completedAt: item.completedAt || null, physical, mtime: info.mtimeMs });
       } catch (error) { if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error; unavailable++; }
     }
     return { files, unavailable, sourceStatus: manifest.status ?? 'unknown' };

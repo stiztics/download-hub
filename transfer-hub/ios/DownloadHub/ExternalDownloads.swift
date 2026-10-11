@@ -90,7 +90,7 @@ struct ExternalDownload: Codable, Identifiable {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let job = jobs[index], api = HubAPI(credentials: credentials)
         let root = try DeviceLibrary.shared.resolveDrive(job.driveID)
-        guard root.startAccessingSecurityScopedResource() else { throw HubError.message("Reconnect the drive or select its folder again.") }
+        guard beginFolderAccess(root) else { throw HubError.message("Reconnect the drive or select its folder again.") }
         defer { root.stopAccessingSecurityScopedResource() }
         let partial = root.appendingPathComponent(".download-hub-" + id + ".part")
         let checksum: ChecksumResponse = try await api.send("files/" + job.fileID + "/checksum")
@@ -117,11 +117,8 @@ struct ExternalDownload: Codable, Identifiable {
             var request = api.request("files/" + job.fileID)
             request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
             request.setValue(etag, forHTTPHeaderField: "If-Range")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let data = try await receiveExternalRange(request, start: start, end: end, total: job.file.bytes)
             try Task.checkCancellation()
-            guard let http = response as? HTTPURLResponse, http.statusCode == 206,
-                  http.value(forHTTPHeaderField: "Content-Range") == "bytes \(start)-\(end)/\(job.file.bytes)",
-                  Int64(data.count) == end - start + 1 else { throw HubError.message("The PC refused the expected range. Refresh and retry.") }
             var coordinationError: NSError?, writeError: Error?
             NSFileCoordinator().coordinate(writingItemAt: partial, options: [], error: &coordinationError) { _ in
                 do { try output.write(contentsOf: data); try output.synchronize() } catch { writeError = error }
@@ -153,4 +150,19 @@ struct ExternalDownload: Codable, Identifiable {
             return ["id": job.id, "fileId": job.fileID, "filename": job.file.filename, "bytes": job.file.bytes, "status": job.status, "received": job.received, "error": job.error ?? "", "destination": "SSD · \(name)", "canExport": false]
         }
     }
+}
+
+// Byte processing runs on the generic executor, keeping the UI responsive.
+func receiveExternalRange(_ request: URLRequest, start: Int64, end: Int64, total: Int64) async throws -> Data {
+    let (stream, response) = try await URLSession.shared.bytes(for: request)
+    guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+          http.value(forHTTPHeaderField: "Content-Range") == "bytes \(start)-\(end)/\(total)" else { throw HubError.message("The PC refused the expected range. Refresh and retry.") }
+    var data = Data(); data.reserveCapacity(Int(end - start + 1))
+    for try await byte in stream {
+        if data.count % 16384 == 0 { try Task.checkCancellation() }
+        guard Int64(data.count) < end - start + 1 else { throw HubError.message("The PC sent an oversized range.") }
+        data.append(byte)
+    }
+    guard Int64(data.count) == end - start + 1 else { throw HubError.message("Incomplete range received. Retry the transfer.") }
+    return data
 }

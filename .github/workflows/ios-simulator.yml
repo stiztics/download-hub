@@ -1,6 +1,11 @@
 name: iOS simulator tests
 on:
   workflow_dispatch:
+    inputs:
+      run_maestro:
+        description: Run optional Maestro UI checks (WKWebView accessibility is unreliable on the hosted iOS 26 runtime)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -29,7 +34,11 @@ jobs:
         run: node --test transfer-hub/test/*.test.mjs
       - name: Build simulator bundle
         run: bash transfer-hub/ios/build-simulator.sh
-      - name: Run native UI and transfer tests
+      - name: Run native library, playback and storage integration tests
+        timeout-minutes: 15
+        run: bash transfer-hub/ios/test-native.sh
+      - name: Run optional Maestro UI tests
+        if: ${{ inputs.run_maestro }}
         run: bash transfer-hub/ios/test-simulator.sh
       - name: Collect test artifacts
         if: always()

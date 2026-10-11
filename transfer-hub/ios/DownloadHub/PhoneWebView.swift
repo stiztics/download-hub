@@ -125,6 +125,10 @@ import UIKit
             guard let id = params["id"] as? String else { throw HubError.message("Select a folder.") }
             return ["count": try await media.scan(id)]
         case "importFiles": return try await media.importFiles()
+        case "organize":
+            guard let id = params["id"] as? String, let series = params["series"] as? String, let season = params["season"] as? String else { throw HubError.message("Choose an episode and its folders.") }
+            try DeviceLibrary.shared.organize(id, series: series, season: season, episode: params["episode"] as? Double)
+            return ["saved": true]
         case "play", "importEpisode", "exportEpisode", "deleteEpisode":
             guard let id = params["id"] as? String else { throw HubError.message("Select an episode.") }
             if method == "play" { return try await media.play(id) }

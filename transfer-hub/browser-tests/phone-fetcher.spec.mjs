@@ -4,11 +4,12 @@ import { startFixture } from '../testing/fixture-server.mjs';
 
 async function connect(page, fixture) {
   await page.goto(fixture.server + '/app/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByLabel('PC address', { exact: true }).fill(fixture.server);
   await page.getByLabel('Pairing code', { exact: true }).fill(fixture.code);
   await page.getByRole('button', { name: 'Connect to PC', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Browse Demo Series', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Fetch', exact: true }).click();
+  await page.getByRole('button', { name: 'Discover', exact: true }).click();
 }
 
 for (const nativeMessages of [false, true]) {
@@ -98,7 +99,7 @@ for (const nativeMessages of [false, true]) {
       await page.getByRole('button', { name: 'Refresh PC downloads', exact: true }).click();
       await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled();
       await page.reload();
-      await page.getByRole('button', { name: 'Fetch', exact: true }).click();
+      await page.getByRole('button', { name: 'Discover', exact: true }).click();
       await expect(page.locator('#fetcher-jobs .card')).toHaveCount(1);
       const dimensions = await page.evaluate(() => ({ content: document.documentElement.scrollWidth, viewport: innerWidth }));
       expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport + 1);
@@ -122,10 +123,12 @@ test('shared app requires pairing and demo never reaches the real PC runner', as
   const fixture = await startFixture({ fetcherClient: async route => { calls.push(route); throw new Error('Should never be called'); } });
   try {
     await page.goto(fixture.server + '/app/');
-    await page.getByRole('button', { name: 'Fetch', exact: true }).click();
-    await expect(page.locator('#pair-view')).toBeVisible();
-    await expect(page.locator('#fetcher-view')).toBeHidden();
+    await page.getByRole('button', { name: 'Discover', exact: true }).click();
+    await expect(page.locator('#fetcher-view')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Try demo library', exact: true }).click();
+    await page.getByRole('button', { name: 'Discover', exact: true }).click();
     await expect(page.locator('#fetcher-status')).toHaveText('Demo — PC runner controls unavailable');
     await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Resume PC downloads', exact: true })).toBeDisabled();

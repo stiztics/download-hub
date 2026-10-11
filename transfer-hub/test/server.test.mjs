@@ -14,6 +14,29 @@ test('range parser handles resume, suffix and unsatisfiable requests', () => {
   for (const value of ['bytes=100-', 'bytes=-0', 'bytes=20-10', 'bytes=0-1,5-8', 'bytes=9007199254740993-']) assert.equal(byteRange(value, 100), false);
 });
 
+test('Dragon Ball movie folders are exposed as movies without changing filenames or IDs', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'dragon-ball-library-'));
+  const libraryRoot=path.join(root,'Anime');
+  const folder='Dragon Ball/Movies/2018 - Super Broly';
+  const file='Dragon Ball - Super Broly - E001 [1080p SUB].mp4';
+  await mkdir(path.join(libraryRoot,folder),{recursive:true});
+  await writeFile(path.join(libraryRoot,folder,file),'test');
+  await writeFile(path.join(libraryRoot,'download-queue.json'),JSON.stringify({items:[{id:'broly/one',series:'Dragon Ball',title:'Dragon Ball Super: Broly',folder,file,code:'Super Broly - ',episode:1,status:'complete',bytes:4}]}));
+  const hub=await createHub({libraryRoot,stateRoot:path.join(root,'state')});
+  const {port}=await hub.listen(0);
+  t.after(async()=>{await hub.close();await rm(root,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${port}`;
+  const session=await fetch(base+'/api/local-session',{method:'POST'});
+  const headers={Cookie:session.headers.get('set-cookie').split(';')[0]};
+  const library=await (await fetch(base+'/api/library',{headers})).json();
+  assert.equal(library.files[0].season,'Movie');
+  assert.equal(library.files[0].filename,file);
+  assert.equal(library.files[0].id,createHash('sha256').update('broly/one\0'+path.join(folder,file)).digest('hex'));
+  const download=await fetch(base+'/api/files/'+library.files[0].id,{method:'HEAD',headers});
+  assert.equal(download.status,200);
+  assert.equal(download.headers.get('content-length'),'4');
+});
+
 test('authenticated library, pairing, durable queue and byte-perfect resumed transfer', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'download-hub-test-'));
   const libraryRoot = path.join(root, 'library');

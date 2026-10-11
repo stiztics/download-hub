@@ -11,6 +11,7 @@ const test = base.extend({
 async function pair(page, hub, invalid = false) {
   await page.goto(hub.server + '/app/');
   await expect(page.locator('#platform-note')).toContainText('Windows test mode');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByLabel('PC address', { exact: true }).fill(hub.server);
   await page.getByLabel('Pairing code', { exact: true }).fill(invalid ? '00000000' : hub.code);
   await page.getByRole('button', { name: 'Connect to PC', exact: true }).click();
@@ -24,14 +25,15 @@ async function pair(page, hub, invalid = false) {
 }
 async function queue(page, all = true) {
   await page.getByRole('button', { name: 'Browse Demo Series', exact: true }).click();
+  await page.getByRole('button', { name: 'Browse season S01', exact: true }).click();
   if (all) await page.getByRole('button', { name: 'Select all', exact: true }).click();
   else await page.locator('#episode-list input').first().check();
-  await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Pickup queue', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Transfer selected', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Downloads', exact: true })).toBeVisible();
 }
 async function capture(page, testInfo, name) { const path = testInfo.outputPath(name + '.png'); await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path }); await testInfo.attach(name, { path, contentType: 'image/png' }); }
 async function complete(page, count) {
-  await page.getByRole('button', { name: 'Downloaded', exact: true }).click();
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click();
   await expect(page.locator('#saved-list .card')).toHaveCount(count, { timeout: 20000 });
   await expect(page.locator('#saved-summary')).toContainText(`${count} files`);
   await expect(page.locator('#saved-list')).toContainText('SHA-256 verified');
@@ -45,7 +47,7 @@ test('shared phone UI transfers, pauses, verifies, persists, exports and deletes
   const info = await page.evaluate(() => Hub.call('connection'));
   expect(info.token).toBeUndefined();
   await queue(page);
-  await page.getByRole('button', { name: 'Download queued files', exact: true }).click();
+  await page.getByRole('button', { name: 'Start transfers', exact: true }).click();
   await expect.poll(() => received(page)).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Pause', exact: true }).first().click();
   await expect(page.locator('#queue-list')).toContainText('paused');
@@ -54,10 +56,8 @@ test('shared phone UI transfers, pauses, verifies, persists, exports and deletes
   await complete(page, 2);
   expect(ranges.some(range => /^bytes=[1-9]\d*-/.test(range))).toBe(true);
   await capture(page, testInfo, 'verified-files');
-  await expect.poll(async () => {
-    const response = await fetch(hub.server + '/api/queue', { headers: { Cookie: hub.cookie } });
-    return (await response.json()).filter(entry => entry.status === 'downloaded' && entry.bytesCompleted === entry.bytes).length;
-  }).toBe(2);
+  // The phone owns this queue; no server-side pickup entries are required.
+  expect(await (await fetch(hub.server + '/api/queue', { headers: { Cookie: hub.cookie } })).json()).toEqual([]);
   await page.reload();
   await complete(page, 2);
   const exportedPromise = page.waitForEvent('download');
@@ -82,7 +82,8 @@ test('shared phone UI transfers, pauses, verifies, persists, exports and deletes
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Disconnect PC', exact: true }).click();
   await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-  await expect(page.locator('#pair-view')).toBeVisible();
+  await expect(page.locator('#library-view')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Browse Demo Series', exact: true })).toBeVisible();
   await complete(page, 1);
   await page.reload();
   await complete(page, 1);
@@ -96,13 +97,13 @@ test('shared phone rejects bad checksum and resumes after the fault is removed',
     const value = await response.json();
     await route.fulfill({ response, json: { ...value, sha256: '0'.repeat(64) } });
   });
-  await page.getByRole('button', { name: 'Download queued files', exact: true }).click();
+  await page.getByRole('button', { name: 'Start transfers', exact: true }).click();
   await expect(page.locator('#queue-list')).toContainText('Checksum verification failed', { timeout: 20000 });
   await capture(page, testInfo, 'verification-failed');
-  await page.getByRole('button', { name: 'Downloaded', exact: true }).click();
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click();
   await expect(page.locator('#saved-list .card')).toHaveCount(0);
   await page.unroute('**/api/files/*/checksum');
-  await page.getByRole('button', { name: 'Queue', exact: true }).click();
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click();
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await complete(page, 1);
 });
@@ -110,11 +111,11 @@ test('shared phone rejects bad checksum and resumes after the fault is removed',
 test('shared phone retains partial bytes across reload and resumes with a range', async ({ page, hub }) => {
   await pair(page, hub);
   await queue(page, false);
-  await page.getByRole('button', { name: 'Download queued files', exact: true }).click();
+  await page.getByRole('button', { name: 'Start transfers', exact: true }).click();
   await expect.poll(() => received(page)).toBeGreaterThan(0);
   const before = await received(page);
   await page.reload();
-  await page.getByRole('button', { name: 'Queue', exact: true }).click();
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click();
   await expect(page.locator('#queue-list')).toContainText('paused');
   expect(await received(page)).toBeGreaterThanOrEqual(before);
   const rangePromise = page.waitForRequest(request => request.headers().range?.startsWith('bytes=') && request.headers().range !== 'bytes=0-65535');
@@ -125,11 +126,13 @@ test('shared phone retains partial bytes across reload and resumes with a range'
 
 test('shared demo never pretends a file was downloaded', async ({ page, hub }) => {
   await page.goto(hub.server + '/app/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Try demo library', exact: true }).click();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
   await queue(page);
   await expect(page.locator('#demo-warning')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download queued files', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Downloaded', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Start transfers', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click();
   await expect(page.locator('#saved-list .card')).toHaveCount(0);
 });
 
@@ -149,7 +152,7 @@ test('shared phone also works through the native JavaScript message transport', 
   });
   await pair(page, hub, true);
   await queue(page, false);
-  await page.getByRole('button', { name: 'Download queued files', exact: true }).click();
+  await page.getByRole('button', { name: 'Start transfers', exact: true }).click();
   await complete(page, 1);
   const messages = await page.evaluate(() => window.__testMessages);
   expect(new Set(messages.map(message => message.id)).size).toBe(messages.length);

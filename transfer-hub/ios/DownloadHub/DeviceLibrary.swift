@@ -18,6 +18,7 @@ struct DeviceEpisode: Codable, Identifiable {
     var file: LibraryFile
     var locations: [EpisodeLocation]
     var position: Double = 0
+    var organized: Bool? = nil
 }
 struct LibraryDrive: Codable, Identifiable {
     var id: String
@@ -60,7 +61,7 @@ struct DeviceLibraryState: Codable {
         if let index = state.episodes.firstIndex(where: { $0.locations.contains(where: { $0.id == location.id }) }) {
             let slot = state.episodes[index].locations.firstIndex(where: { $0.id == location.id })!
             state.episodes[index].locations[slot] = location
-            if location.kind == "pc" { state.episodes[index].file = file }
+            if location.kind == "pc" && state.episodes[index].organized != true { state.episodes[index].file = file }
         } else if let checksum = location.checksum, let index = state.episodes.firstIndex(where: {
             $0.file.bytes == file.bytes && $0.locations.contains(where: { $0.checksum == checksum })
         }) {
@@ -115,6 +116,14 @@ struct DeviceLibraryState: Codable {
         state.episodes[index].position = seconds
         try save()
     }
+    func organize(_ id: String, series: String, season: String, episode: Double?) throws {
+        guard !series.isEmpty, series.count <= 150, !season.isEmpty, season.count <= 100,
+              episode == nil || (episode!.isFinite && episode! >= 0),
+              let index = state.episodes.firstIndex(where: { $0.id == id }) else { throw HubError.message("Enter a series, season, and valid episode number.") }
+        let file = state.episodes[index].file
+        state.episodes[index].file = LibraryFile(id: file.id, series: series, title: series, season: season, episode: episode, filename: file.filename, bytes: file.bytes, quality: file.quality, completedAt: file.completedAt)
+        state.episodes[index].organized = true; try save()
+    }
     func addDrive(_ url: URL) throws -> LibraryDrive {
         let bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
         if let existing = state.drives.first(where: { (try? resolveDrive($0.id).standardizedFileURL) == url.standardizedFileURL }) { return existing }
@@ -125,7 +134,7 @@ struct DeviceLibraryState: Codable {
         guard let index = state.drives.firstIndex(where: { $0.id == id }) else { throw HubError.message("Choose an external folder first.") }
         var stale = false
         let url = try URL(resolvingBookmarkData: state.drives[index].bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
-        if stale, url.startAccessingSecurityScopedResource() {
+        if stale, beginFolderAccess(url) {
             defer { url.stopAccessingSecurityScopedResource() }
             state.drives[index].bookmark = try url.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
             try save()
@@ -136,14 +145,14 @@ struct DeviceLibraryState: Codable {
         if location.kind == "pc" { return location.present }
         if let name = location.localName { return FileManager.default.fileExists(atPath: documents.appendingPathComponent(name).path) }
         guard let drive = location.driveID, let relative = location.relativePath, let root = try? resolveDrive(drive) else { return false }
-        guard root.startAccessingSecurityScopedResource() else { return false }
+        guard beginFolderAccess(root) else { return false }
         defer { root.stopAccessingSecurityScopedResource() }
         return FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path)
     }
     func driveList() -> [[String: Any]] {
         state.drives.map { drive in
             var online = false
-            if let root = try? resolveDrive(drive.id), root.startAccessingSecurityScopedResource() {
+            if let root = try? resolveDrive(drive.id), beginFolderAccess(root) {
                 online = FileManager.default.fileExists(atPath: root.path); root.stopAccessingSecurityScopedResource()
             }
             return ["id": drive.id, "name": drive.name, "available": online]
@@ -163,7 +172,7 @@ struct DeviceLibraryState: Codable {
         if let name = source.localName { return (documents.appendingPathComponent(name), nil) }
         guard let id = source.driveID, let relative = source.relativePath, !relative.split(separator: "/").contains("..") else { throw HubError.message("File location is unavailable.") }
         let root = try resolveDrive(id)
-        guard root.startAccessingSecurityScopedResource() else { throw HubError.message("Reconnect the drive or add its folder again.") }
+        guard beginFolderAccess(root) else { throw HubError.message("Reconnect the drive or add its folder again.") }
         let url = root.appendingPathComponent(relative)
         guard FileManager.default.fileExists(atPath: url.path) else { root.stopAccessingSecurityScopedResource(); throw HubError.message("Reconnect the drive or rescan its folder.") }
         return (url, root)
@@ -179,6 +188,12 @@ struct DeviceLibraryState: Codable {
         if let index = state.episodes.firstIndex(where: { $0.id == episodeID }) { state.episodes[index].locations.removeAll { $0.kind == "phone" } }
         try save()
     }
+}
+
+func beginFolderAccess(_ url: URL) -> Bool {
+    if url.startAccessingSecurityScopedResource() { return true }
+    // A folder inside this app's own container already has sandbox access.
+    return url.standardizedFileURL.path.hasPrefix(URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path + "/")
 }
 
 func fileDigest(_ url: URL) throws -> String {
