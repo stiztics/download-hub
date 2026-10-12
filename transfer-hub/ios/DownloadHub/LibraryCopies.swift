@@ -156,7 +156,7 @@ struct LibraryCopyBatch: Codable {
                 }
                 if initial.removeOriginals && source.standardizedFileURL != target.standardizedFileURL {
                     batch!.items[index].source.checksum = result.checksum; batch!.items[index].status = "verified"; try save()
-                    let deletion = Task.detached(priority: .utility) { try removeVerifiedOriginal(source, checksum: result.checksum) }
+                    let deletion = Task.detached(priority: .utility) { try removeVerifiedOriginal(source, destination: target, checksum: result.checksum) }
                     try await withTaskCancellationHandler(operation: { try await deletion.value }, onCancel: { deletion.cancel() })
                     try DeviceLibrary.shared.forgetLocation(item.source.id)
                     batch!.items[index].status = "moved"
@@ -170,7 +170,8 @@ struct LibraryCopyBatch: Codable {
             }
             try save()
         }
-        batch?.status = batch!.items.contains { $0.status == "failed" } ? "completed with errors" : "completed"
+        let finalStatus = batch!.items.contains { $0.status == "failed" } ? "completed with errors" : "completed"
+        batch?.status = finalStatus
     }
     func snapshot() -> [String: Any] {
         guard let batch else { return ["status": "idle", "active": false] }
@@ -227,10 +228,10 @@ func verifiedLibraryCopy(from source: URL, to target: URL, expectedBytes: Int64,
     if let error = operationError ?? coordinationError { throw error }
     guard let result else { throw HubError.message("Copy coordination failed.") }; return result
 }
-func removeVerifiedOriginal(_ source: URL, checksum: String) throws {
+func removeVerifiedOriginal(_ source: URL, destination: URL, checksum: String) throws {
     var coordinationError: NSError?, operationError: Error?
-    NSFileCoordinator().coordinate(writingItemAt: source, options: .forDeleting, error: &coordinationError) { source in
-        do { guard try fileDigest(source) == checksum else { throw HubError.message("The original changed after copying and was preserved.") }; try Task.checkCancellation(); try FileManager.default.removeItem(at: source) }
+    NSFileCoordinator().coordinate(readingItemAt: destination, options: [], writingItemAt: source, options: .forDeleting, error: &coordinationError) { destination, source in
+        do { guard try fileDigest(destination) == checksum, try fileDigest(source) == checksum else { throw HubError.message("A file changed after copying. The original was preserved.") }; try Task.checkCancellation(); try FileManager.default.removeItem(at: source) }
         catch { operationError = error }
     }
     if let error = operationError ?? coordinationError { throw error }

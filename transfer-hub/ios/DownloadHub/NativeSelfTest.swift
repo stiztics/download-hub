@@ -152,6 +152,8 @@ import CoreVideo
         }
         let repeatPlan = try copies.prepareImport(sourceDrive.id)
         try require(repeatPlan["total"] as? Int == 0, "Already imported videos were repeated")
+        do { try removeVerifiedOriginal(originals[0], destination: targetRoot.appendingPathComponent("disconnected.mp4"), checksum: fileDigest(originals[0])); throw HubError.message("Missing destination allowed source deletion") }
+        catch { try require(FileManager.default.fileExists(atPath: originals[0].path), "Destination loss removed the original") }
         checks.append("recursive verified bulk import, folder preservation, cancel/retry and repeat skipping")
         let collision = targetRoot.appendingPathComponent("Bulk series/S01/Episode 1.mp4")
         try FileManager.default.createDirectory(at: collision.deletingLastPathComponent(), withIntermediateDirectories: true)
