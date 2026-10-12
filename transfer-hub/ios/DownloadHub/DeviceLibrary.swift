@@ -75,7 +75,13 @@ struct PendingPCRequest: Codable, Identifiable {
         if let index = state.episodes.firstIndex(where: { $0.locations.contains(where: { $0.id == location.id }) }) {
             let slot = state.episodes[index].locations.firstIndex(where: { $0.id == location.id })!
             state.episodes[index].locations[slot] = location
-            if location.kind == "pc" && state.episodes[index].organized != true { state.episodes[index].file = file }
+            if ["pc", "drive"].contains(location.kind) {
+                if state.episodes[index].organized != true { state.episodes[index].file = file }
+                else {
+                    let old = state.episodes[index].file
+                    state.episodes[index].file = LibraryFile(id: file.id, series: old.series, title: old.title, season: old.season, episode: old.episode, filename: file.filename, bytes: file.bytes, quality: file.quality, completedAt: file.completedAt, sourceId: file.sourceId, fingerprint: file.fingerprint)
+                }
+            }
         } else if let checksum = location.checksum, let index = state.episodes.firstIndex(where: {
             $0.file.bytes == file.bytes && $0.locations.contains(where: { $0.checksum == checksum })
         }) {
@@ -257,6 +263,15 @@ struct PendingPCRequest: Codable, Identifiable {
             for row in TransferManager.shared.transfers where row.localName == name { TransferManager.shared.remove(row.id) }
         }
         if let index = state.episodes.firstIndex(where: { $0.id == episodeID }) { state.episodes[index].locations.removeAll { $0.kind == "phone" } }
+        try save()
+    }
+    func forgetLocation(_ id: String) throws {
+        for item in state.episodes {
+            if let source = item.locations.first(where: { $0.id == id }), let name = source.localName {
+                for row in TransferManager.shared.transfers where row.localName == name { TransferManager.shared.remove(row.id) }
+            }
+        }
+        for index in state.episodes.indices { state.episodes[index].locations.removeAll { $0.id == id } }
         try save()
     }
 }

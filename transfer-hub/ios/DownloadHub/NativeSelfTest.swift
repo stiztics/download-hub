@@ -106,10 +106,13 @@ import CoreVideo
                 try DeviceLibrary.shared.setPosition(indexed.id, seconds: 0)
                 _ = try await media.play(indexed.id)
                 try await waitFor("actual phone playback progress") { media.playbackSeconds > 0 }
+                try require(media.embeddedPlayer, "AVKit was presented as the fullscreen dismissal controller")
+                media.capturePlayer(directory.appendingPathComponent("player-controls.png"))
                 media.finishPlayback()
                 checks.append("video scan, verified import, AVKit presentation and playback position")
+                try await testBulk(checks: &checks)
                 model.disconnect(); ExternalDownloads.shared.disconnect()
-                try require(try DeviceLibrary.shared.snapshot().count == 3, "Disconnect erased the catalog")
+                try require(try DeviceLibrary.shared.snapshot().count >= 3, "Disconnect erased the catalog")
                 checks.append("offline library remains available after disconnect")
             }
             let data = try JSONSerialization.data(withJSONObject: ["success": true, "checks": checks], options: [.prettyPrinted, .sortedKeys])
@@ -120,6 +123,62 @@ import CoreVideo
         }
     }
     private static func require(_ condition: Bool, _ message: String) throws { if !condition { throw HubError.message(message) } }
+    private static func testBulk(checks: inout [String]) async throws {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let sourceRoot = documents.appendingPathComponent("GeneratedBulkSource"), targetRoot = documents.appendingPathComponent("GeneratedBulkDestination")
+        try FileManager.default.createDirectory(at: targetRoot, withIntermediateDirectories: true)
+        var originals: [URL] = []
+        for number in 1...2 {
+            let url = sourceRoot.appendingPathComponent("Bulk series/S0\(number)/Episode \(number).mp4")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: UInt8(number), count: 4 * 1024 * 1024 + number).write(to: url)
+            originals.append(url)
+        }
+        let sourceDrive = try DeviceLibrary.shared.addDrive(sourceRoot), destinationDrive = try DeviceLibrary.shared.addDrive(targetRoot)
+        let media = LibraryMedia(); try require(try await media.scan(sourceDrive.id) == 2, "Nested bulk videos were not indexed")
+        let ids = Set(DeviceLibrary.shared.state.episodes.filter { $0.locations.contains { $0.driveID == sourceDrive.id } }.map(\.id))
+        let copies = LibraryCopies.shared
+        let plan = try copies.prepareImport(sourceDrive.id)
+        try require(plan["total"] as? Int == 2, "Bulk import did not include both subfolders")
+        try copies.start(plan["id"] as! String, removeOriginals: false); copies.cancel()
+        try await waitFor("bulk cancellation") { !copies.active }
+        try require(copies.batch?.status == "canceled", "Bulk cancellation did not settle")
+        try copies.retry(); try await waitFor("bulk recursive import") { !copies.active }
+        try require(copies.batch?.status == "completed", "Bulk import failed: \(copies.snapshot())")
+        for original in originals {
+            let relative = String(original.path.dropFirst(sourceRoot.path.count + 1))
+            let local = documents.appendingPathComponent("Library/" + sourceDrive.id + "/" + relative)
+            try require(try fileDigest(original) == fileDigest(local), "Bulk import bytes or folder structure changed")
+        }
+        let repeatPlan = try copies.prepareImport(sourceDrive.id)
+        try require(repeatPlan["total"] as? Int == 0, "Already imported videos were repeated")
+        checks.append("recursive verified bulk import, folder preservation, cancel/retry and repeat skipping")
+        let collision = targetRoot.appendingPathComponent("Bulk series/S01/Episode 1.mp4")
+        try FileManager.default.createDirectory(at: collision.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("different existing file".utf8).write(to: collision)
+        let exportPlan = try copies.prepareExport(destinationDrive.id, episodeIDs: ids)
+        try copies.start(exportPlan["id"] as! String, removeOriginals: true)
+        try await waitFor("bulk export collision") { !copies.active }
+        try require(copies.batch?.status == "completed with errors", "Collision was not reported")
+        try require(try String(contentsOf: collision, encoding: .utf8) == "different existing file", "Export overwrote existing content")
+        let retained = documents.appendingPathComponent("Library/" + sourceDrive.id + "/Bulk series/S01/Episode 1.mp4")
+        try require(FileManager.default.fileExists(atPath: retained.path), "Failed move removed the original")
+        try FileManager.default.removeItem(at: collision)
+        try copies.retry(); try await waitFor("bulk export retry") { !copies.active }
+        try require(copies.batch?.status == "completed", "Export retry failed")
+        for original in originals {
+            let relative = String(original.path.dropFirst(sourceRoot.path.count + 1))
+            let local = documents.appendingPathComponent("Library/" + sourceDrive.id + "/" + relative)
+            try require(!FileManager.default.fileExists(atPath: local.path), "Verified move retained a local original")
+            try require(try fileDigest(original) == fileDigest(targetRoot.appendingPathComponent(relative)), "Exported bytes differ")
+        }
+        let moveBack = try copies.prepareImport(sourceDrive.id)
+        try copies.start(moveBack["id"] as! String, removeOriginals: true)
+        try await waitFor("verified move to phone") { !copies.active }
+        try require(copies.batch?.status == "completed", "Move to phone failed")
+        for original in originals { try require(!FileManager.default.fileExists(atPath: original.path), "Verified SSD original was not removed") }
+        checks.append("bulk export and moves in both directions verify bytes before deletion, protect collisions and retry")
+    }
     private static func waitFor(_ name: String, condition: () -> Bool) async throws {
         for _ in 0..<1200 {
             if condition() { return }

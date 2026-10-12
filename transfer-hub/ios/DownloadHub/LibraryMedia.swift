@@ -8,13 +8,19 @@ import AVFoundation
     private var selection: CheckedContinuation<[URL], Error>?
     private var picker: UIDocumentPickerViewController?
     private var playback: AVPlayer?
-    private var playerController: UINavigationController?
+    private var playerController: LibraryVideoScreen?
     private var playbackRoot: URL?
     private var playbackID: String?
     private var timeObserver: Any?
     private var closeTimer: Timer?
     #if HUB_TESTING && targetEnvironment(simulator)
     var playbackSeconds: Double { playback?.currentTime().seconds ?? 0 }
+    var embeddedPlayer: Bool { playerController?.playerView.parent === playerController }
+    func capturePlayer(_ url: URL) {
+        guard let window = presenter?.view.window else { return }
+        let picture = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        try? picture.pngData()?.write(to: url)
+    }
     #endif
     private func controller() throws -> UIViewController {
         guard var controller = presenter else { throw HubError.message("The screen is not ready.") }
@@ -85,20 +91,18 @@ import AVFoundation
         do {
             let asset = AVURLAsset(url: url)
             guard try await asset.load(.isPlayable) else { throw HubError.message("Apple's player cannot play this video format. You can still export the file.") }
-            let controller = AVPlayerViewController()
             let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            controller.player = player; controller.allowsPictureInPicturePlayback = false
-            controller.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(closePlayback))
-            let navigation = UINavigationController(rootViewController: controller)
-            navigation.modalPresentationStyle = .fullScreen
-            playback = player; playbackRoot = root; playbackID = item.id; playerController = navigation
+            let screen = LibraryVideoScreen(player: player)
+            screen.onClose = { [weak self] in self?.closePlayback() }
+            screen.onDismiss = { [weak self] in self?.stopPlayback() }
+            playback = player; playbackRoot = root; playbackID = item.id; playerController = screen
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try AVAudioSession.sharedInstance().setActive(true)
             if item.position > 0 { await player.seek(to: CMTime(seconds: item.position, preferredTimescale: 600)) }
             timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 5, preferredTimescale: 600), queue: .main) { time in
                 Task { @MainActor in try? DeviceLibrary.shared.setPosition(item.id, seconds: time.seconds) }
             }
-            try self.controller().present(navigation, animated: true) { player.play() }
+            try self.controller().present(screen, animated: true) { player.play() }
             closeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, let sourceRoot = self.playbackRoot, !FileManager.default.fileExists(atPath: sourceRoot.path) else { return }
@@ -172,6 +176,41 @@ import AVFoundation
         try DeviceLibrary.shared.setChecksum(locationID: source.id, checksum: digest)
         try DeviceLibrary.shared.upsert(item.file, location: EpisodeLocation(id: "drive:\(drive.id):\(relative)", kind: "drive", label: "On SSD · \(drive.name)", driveID: drive.id, relativePath: relative, checksum: digest))
         return ["exported": true]
+    }
+}
+
+// Embed AVKit instead of presenting it as the fullscreen dismissal controller.
+// The app supplies a small text exit; Apple's playback controls remain native.
+@MainActor final class LibraryVideoScreen: UIViewController {
+    let playerView = AVPlayerViewController()
+    var onClose: (() -> Void)?
+    var onDismiss: (() -> Void)?
+    init(player: AVPlayer) {
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+        playerView.player = player; playerView.allowsPictureInPicturePlayback = false
+        playerView.entersFullScreenWhenPlaybackBegins = false
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); view.backgroundColor = .black
+        addChild(playerView); view.addSubview(playerView.view)
+        playerView.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([playerView.view.topAnchor.constraint(equalTo: view.topAnchor), playerView.view.bottomAnchor.constraint(equalTo: view.bottomAnchor), playerView.view.leadingAnchor.constraint(equalTo: view.leadingAnchor), playerView.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
+        playerView.didMove(toParent: self)
+        let back = UIButton(type: .system)
+        back.setTitle("‹ Back to Library", for: .normal); back.tintColor = .white
+        back.titleLabel?.font = .systemFont(ofSize: 14)
+        back.backgroundColor = UIColor.black.withAlphaComponent(0.55); back.layer.cornerRadius = 8
+        back.accessibilityIdentifier = "library-player-back"
+        back.addTarget(self, action: #selector(close), for: .touchUpInside)
+        view.addSubview(back); back.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([back.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12), back.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8), back.widthAnchor.constraint(equalToConstant: 136), back.heightAnchor.constraint(equalToConstant: 40)])
+    }
+    @objc private func close() { onClose?() }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed || presentingViewController == nil { onDismiss?() }
     }
 }
 

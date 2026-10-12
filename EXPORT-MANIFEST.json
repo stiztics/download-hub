@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-11T19:19:31.462Z",
+  "generated": "2026-10-12T01:57:57.042Z",
   "files": [
     ".github/workflows/ios-build.yml",
     ".github/workflows/ios-simulator.yml",
@@ -9,6 +9,7 @@
     "fetcher/paths.mjs",
     "package.json",
     "transfer-hub/TESTING.md",
+    "transfer-hub/browser-tests/bulk.spec.mjs",
     "transfer-hub/browser-tests/fetcher.spec.mjs",
     "transfer-hub/browser-tests/hub.spec.mjs",
     "transfer-hub/browser-tests/library.spec.mjs",
@@ -19,6 +20,7 @@
     "transfer-hub/ios/DownloadHub/ExternalDownloads.swift",
     "transfer-hub/ios/DownloadHub/HubModel.swift",
     "transfer-hub/ios/DownloadHub/Info.plist",
+    "transfer-hub/ios/DownloadHub/LibraryCopies.swift",
     "transfer-hub/ios/DownloadHub/LibraryMedia.swift",
     "transfer-hub/ios/DownloadHub/Models.swift",
     "transfer-hub/ios/DownloadHub/NativeSelfTest.swift",

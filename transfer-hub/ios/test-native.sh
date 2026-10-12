@@ -44,6 +44,7 @@ done
 for attempt in {1..240}; do [[ -s "$report" ]] && break; sleep 1; done
 [[ -s "$report" ]] || { echo 'Native suite did not write a report' >&2; exit 1; }
 cp "$report" build/reports/native-selftest.json
+if [[ -f "$container/Library/Application Support/player-controls.png" ]]; then cp "$container/Library/Application Support/player-controls.png" build/reports/player-controls.png; fi
 node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify(r,null,2));if(!r.success)process.exit(1)' "$report"
 echo 'Testing offline persistence across an actual process relaunch'
 xcrun simctl terminate "$simulator_id" local.downloadhub.personal

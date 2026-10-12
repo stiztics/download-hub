@@ -95,6 +95,7 @@ import UIKit
     }
     private func handle(_ method: String, params: [String: Any]) async throws -> Any {
         media.presenter = webView?.window?.rootViewController
+        if LibraryCopies.shared.active && ["importFiles", "importEpisode", "exportEpisode", "deleteEpisode", "organize", "addFolder", "scanDrive", "delete"].contains(method) { throw HubError.message("Finish or cancel the bulk copy before changing its files.") }
         ExternalDownloads.shared.connect(model.credentials)
         switch method {
         case "connection": return connection()
@@ -136,13 +137,30 @@ import UIKit
             guard let id = params["id"] as? String else { throw HubError.message("Select a folder.") }
             return ["count": try await media.scan(id)]
         case "importFiles": return try await media.importFiles()
+        case "prepareBulk":
+            guard let direction = params["direction"] as? String, ["import", "export"].contains(direction), !LibraryCopies.shared.active else { throw HubError.message("Finish the current copy and choose import or export.") }
+            guard let folder = try await media.pick(types: [.folder]).first, beginFolderAccess(folder) else { throw HubError.message("Select a connected SSD folder.") }
+            defer { folder.stopAccessingSecurityScopedResource() }
+            let drive = try DeviceLibrary.shared.addDrive(folder)
+            if direction == "import" { _ = try await media.scan(drive.id); return try LibraryCopies.shared.prepareImport(drive.id) }
+            return try LibraryCopies.shared.prepareExport(drive.id)
+        case "startBulk":
+            guard let id = params["id"] as? String else { throw HubError.message("Choose a copy folder first.") }
+            try LibraryCopies.shared.start(id, removeOriginals: params["removeOriginals"] as? Bool ?? false)
+            return LibraryCopies.shared.snapshot()
+        case "bulkStatus": return LibraryCopies.shared.snapshot()
+        case "cancelBulk": LibraryCopies.shared.cancel(); return LibraryCopies.shared.snapshot()
+        case "retryBulk": try LibraryCopies.shared.retry(); return LibraryCopies.shared.snapshot()
         case "organize":
             guard let id = params["id"] as? String, let series = params["series"] as? String, let season = params["season"] as? String else { throw HubError.message("Choose an episode and its folders.") }
             try DeviceLibrary.shared.organize(id, series: series, season: season, episode: params["episode"] as? Double)
             return ["saved": true]
         case "play", "importEpisode", "exportEpisode", "deleteEpisode":
             guard let id = params["id"] as? String else { throw HubError.message("Select an episode.") }
-            if method == "play" { return try await media.play(id) }
+            if method == "play" {
+                guard !(LibraryCopies.shared.active && LibraryCopies.shared.batch?.removeOriginals == true) else { throw HubError.message("Finish or cancel the move before playing its files.") }
+                return try await media.play(id)
+            }
             if method == "importEpisode" { return try await media.importEpisode(id) }
             if method == "exportEpisode" { return try await media.exportEpisode(id) }
             try DeviceLibrary.shared.removePhoneCopy(id); return ["deleted": true]

@@ -21,6 +21,7 @@ struct ExternalDownload: Codable, Identifiable {
     static let shared = ExternalDownloads()
     private(set) var jobs: [ExternalDownload] = []
     private var tasks: [String: Task<Void, Never>] = [:]
+    var active: Bool { !tasks.isEmpty }
     private var credentials: Credentials?
     private var storageError: String?
     private let stateURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("external-downloads.json")
@@ -83,7 +84,7 @@ struct ExternalDownload: Codable, Identifiable {
                 try? self.save()
             }
             self.tasks[id] = nil
-            UIApplication.shared.isIdleTimerDisabled = false
+            UIApplication.shared.isIdleTimerDisabled = LibraryCopies.shared.active
             self.pump()
         }
     }

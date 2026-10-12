@@ -2,7 +2,7 @@
   const $ = selector => document.querySelector(selector);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const bytes = value => value >= 1e9 ? `${(value / 1e9).toFixed(1)} GB` : `${(value / 1e6).toFixed(1)} MB`;
-  const state = { connection: {}, files: [], queue: [], transfers: [], drives: [], selection: new Set(), series: null, season: null, filter: 'all', search: '', tab: 'library', online: false, episode: null };
+  const state = { connection: {}, files: [], queue: [], transfers: [], drives: [], selection: new Set(), series: null, season: null, filter: 'all', search: '', tab: 'library', online: false, episode: null, bulk: { status: 'idle' } };
   const fetcher = { status: null, error: '', results: null, title: null, selection: new Set(), query: '', page: 1, notice: '' };
   let connectionEpoch = 0, fetcherRefresh, fetcherBusy = 0;
   let toastTimer, pendingConfirmation, refreshing = false;
@@ -66,7 +66,7 @@
     $('#saved-summary').textContent = `${saved.length} files · ${bytes(saved.reduce((sum, row) => sum + row.bytes, 0))} saved`;
     $('#saved-empty').hidden = saved.length !== 0;
     setHTML('#saved-list', saved.map(row => `<div class="card" data-saved="${escape(row.id)}"><strong>${escape(row.filename)}</strong><p class="muted small">${bytes(row.bytes)} · ${row.verifiedSHA256 ? 'SHA-256 verified' : 'Verification unavailable'}</p>${row.canExport ? `<div class="actions"><button data-command="export" data-id="${escape(row.id)}">Export file</button><button class="danger" data-delete="${escape(row.id)}">Delete file</button></div>` : '<p class="muted small">File is no longer in app storage.</p>'}</div>`).join(''));
-    renderFetcher();
+    renderBulk(); renderFetcher();
   }
   function renderFetcher() {
     setHTML('#pc-summary-jobs', (fetcher.status?.jobs || []).map(job => `<div class="card"><strong>${escape(job.title)} · Episode ${escape(job.episode)}</strong><p class="muted small">${escape(job.phase || job.status)}</p></div>`).join('') || '<p class="muted small">No PC downloads to show. Manage requests in Discover.</p>');
@@ -103,8 +103,9 @@
     fetcher.results = results; fetcher.page = page; fetcher.title = null; fetcher.selection.clear(); fetcher.notice = ''; renderFetcher();
   }
   function switchTab(tab) { state.tab = tab; render(); window.scrollTo(0, 0); if (['fetcher', 'queue'].includes(tab)) void refreshFetcher(); }
+  let bulkPreparing = false;
   let savedRevision = '';
-  async function refreshTransfers() { state.transfers = await Hub.call('transfers'); state.queue = await Hub.call('queue'); const revision = state.transfers.filter(row => row.status === 'downloaded').map(row => row.id).join('|'); if (revision !== savedRevision) { savedRevision = revision; state.files = await Hub.call('library'); } render(); }
+  async function refreshTransfers() { state.bulk = await Hub.call('bulkStatus'); state.transfers = await Hub.call('transfers'); state.queue = await Hub.call('queue'); const revision = state.transfers.filter(row => row.status === 'downloaded').map(row => row.id).join('|') + ':' + state.bulk.id + ':' + state.bulk.completed; if (revision !== savedRevision) { savedRevision = revision; state.files = await Hub.call('library'); } render(); }
   async function refresh() {
     if (refreshing) return;
     refreshing = true;
@@ -127,6 +128,38 @@
     })();
     try { await syncing; } finally { syncing = null; }
   }
+  function renderBulk() {
+    const job = state.bulk || { status: 'idle' };
+    $('#bulk-panel').hidden = ['idle', 'ready'].includes(job.status);
+    $('#bulk-heading').textContent = job.direction === 'import' ? 'SSD → iPhone' : 'iPhone → SSD';
+    $('#bulk-summary').textContent = String(job.completed || 0) + ' / ' + String(job.total || 0) + ' files · ' + job.status + ' · ' + String(job.skipped || 0) + ' skipped · ' + String(job.failed || 0) + ' failed';
+    $('#bulk-file').textContent = [job.filename, job.phase, job.speed > 0 ? bytes(job.speed) + '/s' : '', bytes(job.received || 0) + ' / ' + bytes(job.bytes || 0)].filter(Boolean).join(' · ');
+    $('#bulk-progress').value = job.bytes ? Math.min(1, (job.received || 0) / job.bytes) : 0;
+    $('#bulk-error').textContent = job.error || '';
+    setHTML('#bulk-errors', (job.errors || []).map(row => '<p>' + escape(row.filename) + ': ' + escape(row.error) + '</p>').join(''));
+    $('#bulk-cancel').hidden = !job.active;
+    $('#bulk-retry').hidden = job.active || !['interrupted', 'canceled', 'completed with errors'].includes(job.status);
+    for (const id of ['import-all', 'export-all', 'import-files', 'add-folder']) $('#' + id).disabled = Boolean(job.active || bulkPreparing || state.connection.demo);
+  }
+  for (const [id, direction] of [['import-all', 'import'], ['export-all', 'export']]) $('#' + id).addEventListener('click', event => action(event.currentTarget, async () => {
+    bulkPreparing = true; renderBulk();
+    try { state.bulk = await Hub.call('prepareBulk', { direction }); await refresh(); }
+    finally { bulkPreparing = false; }
+    $('#bulk-title').textContent = direction === 'import' ? 'Import all from SSD' : 'Export all to SSD';
+    $('#bulk-plan').textContent = String(state.bulk.total || 0) + ' videos · ' + bytes(state.bulk.bytes || 0) + '. ' + (direction === 'import' ? 'Videos already on this iPhone are skipped. Subfolders are included.' : 'Original imported folders and your library organization are retained.');
+    $('#bulk-move').checked = false; $('#bulk-start').textContent = 'Copy all'; $('#bulk-start').disabled = !state.bulk.total;
+    $('#bulk-dialog').showModal();
+  }));
+  $('#bulk-move').addEventListener('change', event => { $('#bulk-start').textContent = event.target.checked ? 'Move all' : 'Copy all'; });
+  $('#bulk-dismiss').addEventListener('click', () => $('#bulk-dialog').close());
+  $('#bulk-start').addEventListener('click', event => action(event.currentTarget, async () => {
+    const params = { id: state.bulk.id, removeOriginals: $('#bulk-move').checked };
+    $('#bulk-dialog').close();
+    const start = async () => { state.bulk = await Hub.call('startBulk', params); await refresh(); };
+    if (params.removeOriginals) confirm('Move and remove originals?', 'Each original will be removed only after its destination copy is verified. Completed moves remain if you cancel.', start);
+    else await start();
+  }));
+  for (const [id, method] of [['bulk-cancel', 'cancelBulk'], ['bulk-retry', 'retryBulk']]) $('#' + id).addEventListener('click', event => action(event.currentTarget, async () => { state.bulk = await Hub.call(method); await refresh(); }));
   function confirm(title, text, task) { pendingConfirmation = task; $('#confirm-title').textContent = title; $('#confirm-text').textContent = text; $('#confirm-dialog').showModal(); }
   $('#pair-form').addEventListener('submit', event => { event.preventDefault(); action($('#connect'), async () => { await Hub.call('pair', { server: $('#server').value.trim(), code: $('#code').value }); resetFetcher(); dismissToast(); await syncPC(); switchTab('library'); }); });
   $('#refresh').addEventListener('click', event => action(event.currentTarget, syncPC));
