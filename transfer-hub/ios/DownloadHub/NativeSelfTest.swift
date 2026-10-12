@@ -98,7 +98,7 @@ import CoreVideo
                 media.presenter = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }?.rootViewController
                 _ = try await media.play(indexed.id)
                 try await waitFor("actual drive playback progress") { media.playbackSeconds > 0 }
-                media.finishPlayback()
+                await media.finishPlayback()
                 try await Task.sleep(nanoseconds: 500_000_000)
                 _ = try await media.importEpisode(indexed.id)
                 try require(try DeviceLibrary.shared.episode(indexed.id).locations.contains { $0.kind == "phone" }, "SSD import did not create an iPhone copy")
@@ -109,7 +109,7 @@ import CoreVideo
                 try require(media.embeddedPlayer, "AVKit was presented as the fullscreen dismissal controller")
                 media.capturePlayer(directory.appendingPathComponent("player-controls.png"))
                 try require(FileManager.default.fileExists(atPath: directory.appendingPathComponent("player-controls.png").path), "Player screenshot was not captured")
-                media.finishPlayback()
+                await media.finishPlayback()
                 checks.append("video scan, verified import, AVKit presentation and playback position")
                 try await testBulk(checks: &checks)
                 model.disconnect(); ExternalDownloads.shared.disconnect()

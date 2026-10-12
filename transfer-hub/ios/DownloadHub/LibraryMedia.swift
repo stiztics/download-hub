@@ -13,6 +13,7 @@ import AVFoundation
     private var playbackID: String?
     private var timeObserver: Any?
     private var closeTimer: Timer?
+    private var dismissal: Task<Void, Never>?
     #if HUB_TESTING && targetEnvironment(simulator)
     var playbackSeconds: Double { playback?.currentTime().seconds ?? 0 }
     var embeddedPlayer: Bool { playerController?.playerView.parent === playerController }
@@ -83,7 +84,7 @@ import AVFoundation
         return files.count
     }
     func play(_ episodeID: String) async throws -> [String: Any] {
-        stopPlayback()
+        await finishPlayback()
         let item = try DeviceLibrary.shared.episode(episodeID)
         let local = item.locations.filter { $0.kind != "pc" && DeviceLibrary.shared.available($0) }.sorted { $0.kind == "phone" && $1.kind != "phone" }
         guard let source = local.first else { throw HubError.message("Download this episode or reconnect its drive to play.") }
@@ -93,8 +94,8 @@ import AVFoundation
             guard try await asset.load(.isPlayable) else { throw HubError.message("Apple's player cannot play this video format. You can still export the file.") }
             let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             let screen = LibraryVideoScreen(player: player)
-            screen.onClose = { [weak self] in self?.closePlayback() }
-            screen.onDismiss = { [weak self] in self?.stopPlayback() }
+            screen.onClose = { [weak self, weak screen] in guard let self, let screen, self.playerController === screen else { return }; self.closePlayback() }
+            screen.onDismiss = { [weak self, weak screen] in guard let self, let screen, self.playerController === screen else { return }; self.stopPlayback() }
             playback = player; playbackRoot = root; playbackID = item.id; playerController = screen
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try AVAudioSession.sharedInstance().setActive(true)
@@ -112,8 +113,16 @@ import AVFoundation
             return ["playing": true]
         } catch { if playbackRoot == nil { root?.stopAccessingSecurityScopedResource() }; stopPlayback(); throw error }
     }
-    @objc private func closePlayback() { playerController?.dismiss(animated: true); stopPlayback() }
-    func finishPlayback() { closePlayback() }
+    @objc private func closePlayback() {
+        guard dismissal == nil, let screen = playerController else { return }
+        stopPlayback()
+        guard screen.presentingViewController != nil else { return }
+        dismissal = Task { @MainActor [weak self] in
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in screen.dismiss(animated: true) { continuation.resume() } }
+            self?.dismissal = nil
+        }
+    }
+    func finishPlayback() async { closePlayback(); await dismissal?.value }
     private func stopPlayback() {
         if let player = playback {
             if let id = playbackID { try? DeviceLibrary.shared.setPosition(id, seconds: player.currentTime().seconds) }
