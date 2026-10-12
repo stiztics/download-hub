@@ -156,14 +156,14 @@
           if (window.__externalFolderFixture?.available === false) throw new Error('The drive disconnected. Reconnect it and retry.');
           if (!file || item.file.bytes > 16 * 1024 * 1024) throw new Error('Generated Windows bulk fixtures are limited to 16 MiB per file.');
           let data;
-          if (bulk.direction === 'import') {
+          if (bulk.direction === 'import' && !item.existingSource) {
             const source = window.__externalFolderFixture.files.find(source => source.id === file.id);
             if (!source) throw new Error('Source file unavailable.');
             data = new Uint8Array(file.bytes);
             const seed = [...file.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
             for (let index = 0; index < data.length; index++) data[index] = (seed + index) % 251;
           } else {
-            const row = rows.get(item.source.transferId);
+            const row = rows.get(item.existingSource?.transferId || item.source.transferId);
             if (!row) throw new Error('Saved file unavailable.');
             data = new Uint8Array(await new Blob(row.chunks).arrayBuffer());
           }
@@ -180,19 +180,19 @@
           if (bulkCanceled) throw new Error('Canceled');
           const collision = window.__externalFolderFixture?.existing?.[file.filename];
           if (bulk.direction === 'export' && collision && collision !== checksum) throw new Error('A different file already exists at this destination. It was preserved.');
-          if (bulk.direction === 'import') {
+          if (bulk.direction === 'import' && !item.existingSource) {
             const id = 'bulk-' + crypto.randomUUID();
             const row = { id, fileId: file.id, filename: file.filename, bytes: file.bytes, status: 'downloaded', received: file.bytes, chunks: [copy.buffer], verifiedSHA256: checksum, imported: true, entry: { ...item.file, clientOwned: true } };
             rows.set(id, row); await save(row);
             file.locations.push({ id: 'phone:' + id, kind: 'phone', label: 'On iPhone', available: true, transferId: id, checksum });
-          } else if (!file.locations.some(source => source.kind === 'drive' && source.driveID === bulk.driveID)) {
+          } else if (bulk.direction === 'export' && !file.locations.some(source => source.kind === 'drive' && source.driveID === bulk.driveID)) {
             file.locations.push({ id: 'drive:' + bulk.driveID + ':' + file.id, kind: 'drive', label: 'On SSD · ' + window.__externalFolderFixture.name, available: true, driveID: bulk.driveID, checksum });
           }
           if (bulk.removeOriginals) {
             if (bulk.direction === 'export') { await transaction('readwrite', store => store.delete(item.source.transferId)); rows.delete(item.source.transferId); }
             file.locations = file.locations.filter(source => source.id !== item.source.id);
             item.status = 'moved';
-          } else item.status = collision ? 'skipped' : 'copied';
+          } else item.status = collision || item.existingSource ? 'skipped' : 'copied';
           rememberCatalog();
         } catch (error) {
           if (bulkCanceled) { item.status = 'pending'; throw error; }
@@ -230,10 +230,17 @@
           if (params.direction === 'import') await this.call('addFolder');
           else if (!driveState.some(drive => drive.id === folder.id)) { driveState.push({ id: folder.id, name: folder.name, available: true }); localStorage.setItem('hub-test-drives', JSON.stringify(driveState)); }
           const items = snapshot().flatMap(file => {
-            if (params.direction === 'import') return file.locations.some(source => source.kind === 'phone' && source.available) ? [] : file.locations.filter(source => source.kind === 'drive' && source.driveID === folder.id && source.available).map(source => ({ file, source, status: 'pending' }));
+            if (params.direction === 'import') {
+              const existingSource = file.locations.find(source => source.kind === 'phone' && source.available);
+              return existingSource && !params.includeImported ? [] : file.locations.filter(source => source.kind === 'drive' && source.driveID === folder.id && source.available).map(source => ({ file, source, existingSource, status: 'pending' }));
+            }
             return file.locations.filter(source => source.kind === 'phone' && source.available).map(source => ({ file, source, status: 'pending' }));
           });
           bulk = { id: crypto.randomUUID(), direction: params.direction, driveID: folder.id, status: 'ready', items, removeOriginals: false }; saveBulk(); return bulkStatus();
+        }
+        case 'replanBulk': {
+          if (bulk?.id !== params.id || bulk.status !== 'ready' || bulk.direction !== 'import') throw new Error('Choose an import folder first.');
+          return this.call('prepareBulk', { direction: 'import', includeImported: params.removeOriginals === true });
         }
         case 'startBulk': {
           if (bulkRunning || params.id !== bulk?.id) throw new Error('Choose a folder first.');

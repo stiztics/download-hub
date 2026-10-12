@@ -150,7 +150,13 @@
     $('#bulk-move').checked = false; $('#bulk-start').textContent = 'Copy all'; $('#bulk-start').disabled = !state.bulk.total;
     $('#bulk-dialog').showModal();
   }));
-  $('#bulk-move').addEventListener('change', event => { $('#bulk-start').textContent = event.target.checked ? 'Move all' : 'Copy all'; });
+  $('#bulk-move').addEventListener('change', event => action(event.target, async () => {
+    $('#bulk-start').disabled = true;
+    if (state.bulk.direction === 'import') state.bulk = await Hub.call('replanBulk', { id: state.bulk.id, removeOriginals: event.target.checked });
+    $('#bulk-start').textContent = event.target.checked ? 'Move all' : 'Copy all';
+    $('#bulk-start').disabled = !state.bulk.total;
+    $('#bulk-plan').textContent = String(state.bulk.total || 0) + ' videos · ' + bytes(state.bulk.bytes || 0) + '. ' + (event.target.checked ? state.bulk.direction === 'import' ? 'Existing iPhone copies are verified too before SSD originals can be removed.' : 'Each iPhone original is removed only after its SSD copy is verified.' : 'Originals stay where they are.');
+  }));
   $('#bulk-dismiss').addEventListener('click', () => $('#bulk-dialog').close());
   $('#bulk-start').addEventListener('click', event => action(event.currentTarget, async () => {
     const params = { id: state.bulk.id, removeOriginals: $('#bulk-move').checked };

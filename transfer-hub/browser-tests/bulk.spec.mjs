@@ -67,3 +67,18 @@ test('moves require confirmation and collision errors preserve the source copy',
     expect(after.every(file => !file.locations.some(source => source.kind === 'phone') && file.locations.some(source => source.driveID === 'move-destination'))).toBe(true);
   } finally { await fixture.close(); }
 });
+
+test('already imported videos can be moved by verifying the existing phone copies', async ({ page }) => {
+  const fixture = await startFixture();
+  try {
+    await open(page, fixture); await start(page, 'import'); await complete(page);
+    await page.getByRole('button', { name: 'Import all from SSD', exact: true }).click();
+    await expect(page.locator('#bulk-plan')).toContainText('0 videos');
+    await page.getByLabel('Remove originals after verified copying', { exact: true }).check();
+    await expect(page.locator('#bulk-plan')).toContainText('2 videos');
+    await page.getByRole('button', { name: 'Move all', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click(); await complete(page);
+    const files = await page.evaluate(() => Hub.call('library'));
+    expect(files.every(file => file.locations.filter(source => source.kind === 'phone').length === 1 && !file.locations.some(source => source.kind === 'drive'))).toBe(true);
+  } finally { await fixture.close(); }
+});

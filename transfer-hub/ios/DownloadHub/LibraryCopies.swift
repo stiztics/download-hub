@@ -52,14 +52,15 @@ struct LibraryCopyBatch: Codable {
         if let loadError { throw HubError.message(loadError) }
         if let batch { try JSONEncoder().encode(batch).write(to: stateURL, options: .atomic) }
     }
-    func prepareImport(_ driveID: String) throws -> [String: Any] {
+    func prepareImport(_ driveID: String, includeImported: Bool = false) throws -> [String: Any] {
         guard !active else { throw HubError.message("Finish or cancel the current copy first.") }
         var items: [LibraryCopyItem] = []
         for episode in DeviceLibrary.shared.state.episodes {
-            if episode.locations.contains(where: { $0.kind == "phone" && DeviceLibrary.shared.available($0) }) { continue }
+            let local = episode.locations.first(where: { $0.kind == "phone" && DeviceLibrary.shared.available($0) })
+            if local != nil && !includeImported { continue }
             for source in episode.locations where source.kind == "drive" && source.driveID == driveID && DeviceLibrary.shared.available(source) {
                 guard let relative = source.relativePath else { continue }
-                items.append(LibraryCopyItem(file: episode.file, source: source, targetName: "Library/" + driveID + "/" + safeRelativePath(relative)))
+                items.append(LibraryCopyItem(file: episode.file, source: source, targetName: local?.localName ?? ("Library/" + driveID + "/" + safeRelativePath(relative))))
             }
         }
         batch = LibraryCopyBatch(direction: "import", driveID: driveID, items: items)
@@ -110,6 +111,10 @@ struct LibraryCopyBatch: Codable {
         defer { root.stopAccessingSecurityScopedResource() }
         guard FileManager.default.fileExists(atPath: root.path) else { throw HubError.message("Reconnect the selected drive and retry.") }
         let targetRoot = initial.direction == "import" ? documents : root
+        for (index, item) in initial.items.enumerated() {
+            let partial = targetRoot.appendingPathComponent(item.targetName).deletingLastPathComponent().appendingPathComponent(copyPartialName(initial.id, index))
+            if FileManager.default.fileExists(atPath: partial.path) { try FileManager.default.removeItem(at: partial) }
+        }
         let required = initial.items.filter { !["copied", "skipped", "moved"].contains($0.status) && !FileManager.default.fileExists(atPath: targetRoot.appendingPathComponent($0.targetName).path) }.reduce(Int64(0)) { $0 + $1.file.bytes }
         if let free = try? targetRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage, free < required {
             throw HubError.message("Not enough destination space for this batch (\(readableBytes(required)) needed).")
@@ -138,7 +143,7 @@ struct LibraryCopyBatch: Codable {
             batch!.items[index].status = "copying"; batch!.items[index].error = nil; try save()
             do {
                 let worker = Task.detached(priority: .utility) {
-                    try verifiedLibraryCopy(from: source, to: target, expectedBytes: item.file.bytes, expectedChecksum: item.source.checksum) { bytes, phase in
+                    try verifiedLibraryCopy(from: source, to: target, expectedBytes: item.file.bytes, expectedChecksum: item.source.checksum, temporaryName: copyPartialName(initial.id, index)) { bytes, phase in
                         Task { @MainActor in
                             guard self.task != nil, self.batch?.id == initial.id, self.batch?.status == "running", self.batch?.items[index].status == "copying" else { return }
                             self.currentBytes = bytes; self.phase = phase
@@ -188,10 +193,11 @@ struct LibraryCopyBatch: Codable {
 
 struct VerifiedLibraryCopy { let checksum: String; let existing: Bool }
 func safeRelativePath(_ value: String) -> String { value.split(separator: "/").map { safeFilename(String($0)) }.joined(separator: "/") }
+func copyPartialName(_ batchID: String, _ index: Int) -> String { ".download-hub-copy-" + safeFilename(batchID) + "-\(index).part" }
 
 // Hash while reading the source, then verify the stored destination. Bounded
 // buffers, one final disk flush, and cancellation avoid large temporary RAM use.
-func verifiedLibraryCopy(from source: URL, to target: URL, expectedBytes: Int64, expectedChecksum: String?, progress: @escaping @Sendable (Int64, String) -> Void = { _, _ in }) throws -> VerifiedLibraryCopy {
+func verifiedLibraryCopy(from source: URL, to target: URL, expectedBytes: Int64, expectedChecksum: String?, temporaryName: String? = nil, progress: @escaping @Sendable (Int64, String) -> Void = { _, _ in }) throws -> VerifiedLibraryCopy {
     try Task.checkCancellation()
     try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
     var coordinationError: NSError?, operationError: Error?, result: VerifiedLibraryCopy?
@@ -205,7 +211,7 @@ func verifiedLibraryCopy(from source: URL, to target: URL, expectedBytes: Int64,
                 guard expectedChecksum == nil || expectedChecksum == digest, try fileDigest(target) == digest else { throw HubError.message("A different file already exists at this destination. It was preserved.") }
                 result = VerifiedLibraryCopy(checksum: digest, existing: true); return
             }
-            let temporary = target.deletingLastPathComponent().appendingPathComponent("." + UUID().uuidString + ".copying")
+            let temporary = target.deletingLastPathComponent().appendingPathComponent(temporaryName ?? ("." + UUID().uuidString + ".copying"))
             defer { try? FileManager.default.removeItem(at: temporary) }
             guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else { throw HubError.message("Cannot write to this folder.") }
             let input = try FileHandle(forReadingFrom: source), output = try FileHandle(forWritingTo: temporary)

@@ -148,6 +148,9 @@ import UIKit
             guard let id = params["id"] as? String else { throw HubError.message("Choose a copy folder first.") }
             try LibraryCopies.shared.start(id, removeOriginals: params["removeOriginals"] as? Bool ?? false)
             return LibraryCopies.shared.snapshot()
+        case "replanBulk":
+            guard let id = params["id"] as? String, let plan = LibraryCopies.shared.batch, plan.id == id, plan.status == "ready", plan.direction == "import" else { throw HubError.message("Choose an import folder first.") }
+            return try LibraryCopies.shared.prepareImport(plan.driveID, includeImported: params["removeOriginals"] as? Bool ?? false)
         case "bulkStatus": return LibraryCopies.shared.snapshot()
         case "cancelBulk": LibraryCopies.shared.cancel(); return LibraryCopies.shared.snapshot()
         case "retryBulk": try LibraryCopies.shared.retry(); return LibraryCopies.shared.snapshot()

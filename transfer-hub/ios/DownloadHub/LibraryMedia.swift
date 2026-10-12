@@ -17,7 +17,7 @@ import AVFoundation
     var playbackSeconds: Double { playback?.currentTime().seconds ?? 0 }
     var embeddedPlayer: Bool { playerController?.playerView.parent === playerController }
     func capturePlayer(_ url: URL) {
-        guard let window = presenter?.view.window else { return }
+        guard let window = playerController?.view.window ?? presenter?.view.window else { return }
         let picture = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
         try? picture.pngData()?.write(to: url)
     }

@@ -108,6 +108,7 @@ import CoreVideo
                 try await waitFor("actual phone playback progress") { media.playbackSeconds > 0 }
                 try require(media.embeddedPlayer, "AVKit was presented as the fullscreen dismissal controller")
                 media.capturePlayer(directory.appendingPathComponent("player-controls.png"))
+                try require(FileManager.default.fileExists(atPath: directory.appendingPathComponent("player-controls.png").path), "Player screenshot was not captured")
                 media.finishPlayback()
                 checks.append("video scan, verified import, AVKit presentation and playback position")
                 try await testBulk(checks: &checks)
@@ -143,7 +144,11 @@ import CoreVideo
         try copies.start(plan["id"] as! String, removeOriginals: false); copies.cancel()
         try await waitFor("bulk cancellation") { !copies.active }
         try require(copies.batch?.status == "canceled", "Bulk cancellation did not settle")
+        let partial = documents.appendingPathComponent(copies.batch!.items[0].targetName).deletingLastPathComponent().appendingPathComponent(copyPartialName(copies.batch!.id, 0))
+        try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("interrupted partial".utf8).write(to: partial)
         try copies.retry(); try await waitFor("bulk recursive import") { !copies.active }
+        try require(!FileManager.default.fileExists(atPath: partial.path), "Retry left an interrupted partial behind")
         try require(copies.batch?.status == "completed", "Bulk import failed: \(copies.snapshot())")
         for original in originals {
             let relative = String(original.path.dropFirst(sourceRoot.path.count + 1))
@@ -152,6 +157,8 @@ import CoreVideo
         }
         let repeatPlan = try copies.prepareImport(sourceDrive.id)
         try require(repeatPlan["total"] as? Int == 0, "Already imported videos were repeated")
+        let existingMovePlan = try copies.prepareImport(sourceDrive.id, includeImported: true)
+        try require(existingMovePlan["total"] as? Int == 2 && copies.batch!.items.allSatisfy { FileManager.default.fileExists(atPath: documents.appendingPathComponent($0.targetName).path) }, "Existing local copies could not be selected for a verified move")
         do { try removeVerifiedOriginal(originals[0], destination: targetRoot.appendingPathComponent("disconnected.mp4"), checksum: fileDigest(originals[0])); throw HubError.message("Missing destination allowed source deletion") }
         catch { try require(FileManager.default.fileExists(atPath: originals[0].path), "Destination loss removed the original") }
         checks.append("recursive verified bulk import, folder preservation, cancel/retry and repeat skipping")
@@ -179,6 +186,24 @@ import CoreVideo
         try await waitFor("verified move to phone") { !copies.active }
         try require(copies.batch?.status == "completed", "Move to phone failed")
         for original in originals { try require(!FileManager.default.fileExists(atPath: original.path), "Verified SSD original was not removed") }
+        // Copy first, move later must verify the existing phone files without
+        // rewriting them or creating duplicate local copies.
+        let previousItems = copies.batch!.items
+        for item in previousItems {
+            let relative = item.source.relativePath!
+            try FileManager.default.copyItem(at: targetRoot.appendingPathComponent(relative), to: sourceRoot.appendingPathComponent(relative))
+            try DeviceLibrary.shared.upsert(item.file, location: item.source)
+        }
+        let existing = try copies.prepareImport(sourceDrive.id, includeImported: true)
+        let targets = copies.batch!.items.map { documents.appendingPathComponent($0.targetName) }
+        let dates = try targets.map { try $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+        try copies.start(existing["id"] as! String, removeOriginals: true)
+        try await waitFor("move already imported originals") { !copies.active }
+        try require(copies.batch?.status == "completed", "Existing local copies could not be verified for moving")
+        for (index, target) in targets.enumerated() {
+            try require(try target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate == dates[index], "An existing phone copy was unnecessarily rewritten")
+        }
+        for original in originals { try require(!FileManager.default.fileExists(atPath: original.path), "Already imported SSD original was not removed after verification") }
         checks.append("bulk export and moves in both directions verify bytes before deletion, protect collisions and retry")
     }
     private static func waitFor(_ name: String, condition: () -> Bool) async throws {
